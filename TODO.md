@@ -171,7 +171,12 @@ estado deseado.
        `log_level` se cargaba pero nunca se aplicaba (init corría antes que la config),
        y `service::windows::run_service` exigía `Send` en el future sin necesitarlo
        (rompía código legítimo con un `MutexGuard` retenido a través de un `.await`).
-       Pendiente: OxiPulse, CupraFlow, Nexus Agent.
+       **OxiPulse hecho 2026-08-23** (mismos 4 pasos, + `buffer.rs`/`is_reachable`/
+       `parse_host_port` movidos a `sb_agent_core::buffer`/`::net` ya que OxiPulse era
+       el origen literal de ese código). De paso arregló un bug preexistente y sin
+       relación — `opentelemetry`/`opentelemetry-otlp` en 0.27 vs `opentelemetry_sdk`
+       en 0.32, ya roto en el `Cargo.lock` comitteado antes de tocar nada del retrofit.
+       Pendiente: CupraFlow, Nexus Agent.
 6. [ ] **TUI** sobre el socket: primero en un agente, luego la vista multi-agente en Nexus.
 
 ---
