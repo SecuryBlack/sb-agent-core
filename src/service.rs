@@ -54,7 +54,11 @@ pub mod windows {
         service_dispatcher,
     };
 
-    type BoxFut = Pin<Box<dyn Future<Output = ()> + Send>>;
+    // Sin `+ Send` en el future: solo se conduce vía `rt.block_on()` en el
+    // hilo del dispatcher, nunca con `tokio::spawn`, así que no hace falta
+    // exigirlo — y exigirlo de más rompía código legítimo que retiene un
+    // `MutexGuard` a través de un `.await` (válido bajo `block_on`).
+    type BoxFut = Pin<Box<dyn Future<Output = ()>>>;
     type RunFn = Box<dyn Fn(oneshot::Receiver<()>) -> BoxFut + Send + Sync>;
 
     static SERVICE_NAME: OnceLock<String> = OnceLock::new();
@@ -68,7 +72,7 @@ pub mod windows {
     pub fn run_service<F, Fut>(service_name: &str, run: F) -> Result<(), windows_service::Error>
     where
         F: Fn(oneshot::Receiver<()>) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
+        Fut: Future<Output = ()> + 'static,
     {
         let _ = SERVICE_NAME.set(service_name.to_string());
         let _ = RUN_FN.set(Box::new(move |rx| Box::pin(run(rx))));
