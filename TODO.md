@@ -189,7 +189,26 @@ estado deseado.
        genuinamente distinto al `New-Service` de los otros tres — no se tocó. De paso
        arregló el mismo bug que FerroSentry: `logging.level` se cargaba pero nunca se
        aplicaba. **Los 4 agentes existentes retrofiteados — este punto queda cerrado.**
-6. [ ] **TUI** sobre el socket: primero en un agente, luego la vista multi-agente en Nexus.
+6. [x] **TUI** sobre el socket. Hecho 2026-08-23:
+       - `status_client.rs`: lee un snapshot del socket/pipe, síncrono, con timeout opcional.
+       - `tui.rs`: `run_top(agent_name)` — vista ratatui genérica (estado/versión/uptime +
+         `details` como JSON), refresco ~1s, `q`/Esc para salir. No sabe nada de métricas,
+         hallazgos ni fases de deploy — cada agente se lleva esto gratis.
+       - `cli.rs`: `dispatch_common_args` — unifica `--version`/`status`/`top` en un único
+         punto en vez de copiarlo en cada `main.rs` (estaba a punto de repetirse una cuarta
+         vez cuando lo generalicé).
+       - Cableado en los 4 agentes: OxiPulse, FerroSentry y Nexus Agent vía
+         `dispatch_common_args`; CupraFlow por su cuenta (tiene su propio `clap`) con un
+         subcomando `top` nuevo y `status` ampliado con la foto del socket.
+       - **Nivel 2 cerrado también**: `nexus-agent/src/registry/mod.rs` ahora prueba el
+         status socket antes de la heurística de proceso/PATH/`--version` por subproceso —
+         si el socket responde es autoritativo (proceso vivo, versión real, cero subprocesos).
+         La heurística vieja solo sobrevive como fallback para distinguir "parado" de
+         "nunca instalado", algo que el socket solo no puede decir.
+       - Verificado con un test de extremo a extremo real (servidor + cliente, socket real)
+         en `tests/status_roundtrip.rs`, aparte de probar en caliente contra un OxiPulse
+         real corriendo en la máquina de desarrollo.
+       - **Nivel 3 (TUI de flota) sigue descartado**, como decía el diseño original.
 
 ---
 
