@@ -217,7 +217,7 @@ estado deseado.
 - [ ] Nombre y ubicación del crate (`sb-agent-core` vs. neutro).
 - [ ] ¿`core` publica en crates.io o se consume por git tag? Crates.io es más limpio para OSS
       y obliga a disciplina de release; git tag es más rápido al principio.
-- [ ] Esquema exacto del JSON de status: tiene que ser genérico para los cinco agentes y aun
-      así útil. Probablemente: campos comunes fijos + un blob `details` por agente.
-- [ ] ¿El status socket lo consume también el health check del `registry` de Nexus, sustituyendo
-      la heurística actual? (Mi inclinación: sí, y es media razón para construirlo.)
+- [x] Esquema del JSON de status — cerrado en `status.rs`: `{agent, version, state, since_unix,
+      details}`, campos fijos + blob libre.
+- [x] El `registry` de Nexus ya consume el status socket como fuente primaria — hecho junto con
+      la TUI (punto 6). La heurística vieja queda solo como fallback.
