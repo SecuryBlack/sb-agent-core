@@ -165,8 +165,13 @@ estado deseado.
        enteras con un agente, no con cinco.
 4. [ ] **`sb-conduit`** cuando CromoForge necesite el túnel — ahí habrá tres consumidores y el
        diseño correcto será obvio. Incluye el rediseño de la parte de deploy del proto.
-5. [ ] **Retrofit uno a uno**, empezando por FerroSentry (el más parecido a OxiPulse).
-       Nunca big-bang.
+5. [~] **Retrofit uno a uno**, empezando por FerroSentry (el más parecido a OxiPulse).
+       Nunca big-bang. **FerroSentry hecho 2026-08-23** (4 pasos: config, updater,
+       logging, servicio+status socket) — encontró y arregló dos bugs reales de paso:
+       `log_level` se cargaba pero nunca se aplicaba (init corría antes que la config),
+       y `service::windows::run_service` exigía `Send` en el future sin necesitarlo
+       (rompía código legítimo con un `MutexGuard` retenido a través de un `.await`).
+       Pendiente: OxiPulse, CupraFlow, Nexus Agent.
 6. [ ] **TUI** sobre el socket: primero en un agente, luego la vista multi-agente en Nexus.
 
 ---
