@@ -182,8 +182,13 @@ estado deseado.
        lo pida sería una decisión de producto, no un detalle de refactor. También
        cayó el feature opcional `windows-service` de Cargo, redundante ahora que
        `sb-agent-core` ya trae esa dependencia siempre en Windows.
-       Pendiente: CupraFlow (el más atípico — sin `install.sh`, registro de servicio
-       propio vía subcomandos del binario en vez de `New-Service`).
+       **CupraFlow hecho 2026-08-23** — retrofit parcial, a propósito: solo config
+       (carga + sync de versión) y status socket. No tenía updater que retrofitear
+       (nunca implementó auto-update pese a tener la sección `[update]` en config), y
+       su registro de servicio vía `ServiceManager`/subcomandos del binario es
+       genuinamente distinto al `New-Service` de los otros tres — no se tocó. De paso
+       arregló el mismo bug que FerroSentry: `logging.level` se cargaba pero nunca se
+       aplicaba. **Los 4 agentes existentes retrofiteados — este punto queda cerrado.**
 6. [ ] **TUI** sobre el socket: primero en un agente, luego la vista multi-agente en Nexus.
 
 ---
