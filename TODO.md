@@ -152,8 +152,14 @@ estado deseado.
        Pendiente de verificar en el primer tag real (nada se ha pusheado todavía).
        Abierto: CupraFlow no tiene build Linux — su instalación por `nexus-agent`
        en Linux queda deshabilitada con aviso hasta que exista ese target.
-2. [ ] **`sb-agent-core` v0.1** con lo trivialmente compartible: config, logging, servicio,
-       updater, status socket.
+2. [x] **`sb-agent-core` v0.1** con lo trivialmente compartible: config, logging, servicio,
+       updater, status socket. Hecho 2026-08-23 — `src/config.rs`, `logging.rs`, `service.rs`
+       (consola + Windows Service, parametrizado por nombre de servicio y run loop),
+       `updater.rs` (parametrizado por repo/bin_name), `buffer.rs` (`OfflineBuffer<T>` +
+       `Backoff`, genéricos sobre el tipo de snapshot), `net.rs` (reachability TCP),
+       `status.rs` (socket Unix / named pipe Windows, JSON con campos fijos + `details`
+       libre). Compila y los 9 tests unitarios pasan en Windows. Sin publicar en crates.io
+       todavía — el primer consumidor real (punto 3) es lo que validará la API.
 3. [ ] **CromoForge como primer consumidor.** Es greenfield: nace sobre `core` desde el día uno
        y **valida la API antes** de tocar los otros cuatro. Si `core` está mal diseñado, te
        enteras con un agente, no con cinco.
