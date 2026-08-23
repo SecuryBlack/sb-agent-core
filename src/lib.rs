@@ -11,4 +11,6 @@ pub mod logging;
 pub mod net;
 pub mod service;
 pub mod status;
+pub mod status_client;
+pub mod tui;
 pub mod updater;
