@@ -176,7 +176,14 @@ estado deseado.
        el origen literal de ese código). De paso arregló un bug preexistente y sin
        relación — `opentelemetry`/`opentelemetry-otlp` en 0.27 vs `opentelemetry_sdk`
        en 0.32, ya roto en el `Cargo.lock` comitteado antes de tocar nada del retrofit.
-       Pendiente: CupraFlow, Nexus Agent.
+       **Nexus Agent hecho 2026-08-23** (mismos 4 pasos). Conservó a propósito su
+       `STARTUP_DELAY` de 300s (vs 60s de los demás) vía `with_startup_delay()` — es
+       el drift original que motivó todo este crate, y homogeneizarlo sin que nadie
+       lo pida sería una decisión de producto, no un detalle de refactor. También
+       cayó el feature opcional `windows-service` de Cargo, redundante ahora que
+       `sb-agent-core` ya trae esa dependencia siempre en Windows.
+       Pendiente: CupraFlow (el más atípico — sin `install.sh`, registro de servicio
+       propio vía subcomandos del binario en vez de `New-Service`).
 6. [ ] **TUI** sobre el socket: primero en un agente, luego la vista multi-agente en Nexus.
 
 ---
