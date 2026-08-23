@@ -1,0 +1,162 @@
+name: Reusable Rust Agent Release
+
+# Reusable release pipeline para los agentes Rust de SecuryBlack (OxiPulse,
+# FerroSentry, CupraFlow, Nexus Agent, y en el futuro CromoForge).
+#
+# Diseñado a partir del diff de los 4 release.yml existentes: son idénticos
+# salvo binary name, matriz de targets, flags de cargo por target y (solo
+# CupraFlow) ficheros extra empaquetados junto al binario.
+#
+# Uso desde el repo del agente (.github/workflows/release.yml):
+#
+#   name: Release
+#   on:
+#     push:
+#       tags: ['v*']
+#   permissions:
+#     contents: write
+#   jobs:
+#     release:
+#       uses: securyblack/sb-agent-core/.github/workflows/release.yml@main
+#       with:
+#         binary-name: oxipulse
+#         targets-json: |
+#           [
+#             {"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","archive_ext":"tar.gz","cross":false},
+#             {"target":"aarch64-unknown-linux-gnu","os":"ubuntu-latest","archive_ext":"tar.gz","cross":true},
+#             {"target":"x86_64-pc-windows-msvc","os":"windows-latest","archive_ext":"zip","cross":false}
+#           ]
+#         windows-static-crt: true   # solo OxiPulse lo necesitaba hoy
+
+on:
+  workflow_call:
+    inputs:
+      binary-name:
+        description: Nombre del binario compilado (ej. "oxipulse", "nexus-agent")
+        required: true
+        type: string
+      targets-json:
+        description: >
+          Matriz de targets como JSON array de objetos
+          {target, os, archive_ext, cross, cargo-features}.
+          cross y cargo-features son opcionales (default: false / "").
+        required: true
+        type: string
+      windows-static-crt:
+        description: Añade RUSTFLAGS=-C target-feature=+crt-static al compilar x86_64-pc-windows-msvc
+        required: false
+        type: boolean
+        default: false
+      extra-files:
+        description: >
+          Rutas (separadas por espacio, relativas al repo) a empaquetar junto
+          al binario en el archivo de release. Vacío = solo el binario (caso común).
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build — ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.targets-json) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install aarch64 cross-compilation toolchain
+        if: matrix.cross == true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Build release binary
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          RUSTFLAGS: ${{ (inputs.windows-static-crt && matrix.target == 'x86_64-pc-windows-msvc') && '-C target-feature=+crt-static' || '' }}
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.cargo-features || '' }}
+
+      # ── Linux packaging ──────────────────────────────────────────────────
+      - name: Package (Linux tar.gz)
+        if: matrix.archive_ext == 'tar.gz'
+        run: |
+          set -euo pipefail
+          ASSET="${{ inputs.binary-name }}-${{ matrix.target }}"
+          STAGE="$(mktemp -d)"
+          cp "target/${{ matrix.target }}/release/${{ inputs.binary-name }}" "$STAGE/"
+          for f in ${{ inputs.extra-files }}; do cp "$f" "$STAGE/"; done
+          tar czf "${ASSET}.tar.gz" -C "$STAGE" .
+          sha256sum "${ASSET}.tar.gz" > "${ASSET}.tar.gz.sha256"
+          echo "ASSET_PATH=${ASSET}.tar.gz" >> "$GITHUB_ENV"
+          echo "CHECKSUM_PATH=${ASSET}.tar.gz.sha256" >> "$GITHUB_ENV"
+
+      # ── Windows packaging ────────────────────────────────────────────────
+      - name: Package (Windows zip)
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $asset = "${{ inputs.binary-name }}-${{ matrix.target }}"
+          $stage = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP $asset)
+          Copy-Item "target\${{ matrix.target }}\release\${{ inputs.binary-name }}.exe" $stage
+          foreach ($f in "${{ inputs.extra-files }}".Split(" ", [StringSplitOptions]::RemoveEmptyEntries)) {
+            Copy-Item $f $stage
+          }
+          Compress-Archive -Path "$stage\*" -DestinationPath "${asset}.zip"
+          $hash = (Get-FileHash "${asset}.zip" -Algorithm SHA256).Hash.ToLower()
+          "${hash}  ${asset}.zip" | Set-Content "${asset}.zip.sha256"
+          "ASSET_PATH=${asset}.zip"          | Add-Content $env:GITHUB_ENV
+          "CHECKSUM_PATH=${asset}.zip.sha256" | Add-Content $env:GITHUB_ENV
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ env.ASSET_PATH }}
+            ${{ env.CHECKSUM_PATH }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**
+          generate_release_notes: true
+          fail_on_unmatched_files: true
