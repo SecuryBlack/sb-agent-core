@@ -6,6 +6,7 @@
 //! escribiera cualquiera de los cinco agentes desde cero.
 
 pub mod buffer;
+pub mod cli;
 pub mod config;
 pub mod logging;
 pub mod net;
