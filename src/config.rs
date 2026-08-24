@@ -131,6 +131,41 @@ pub fn sync_bool_field(path: &Path, field: &str, value: bool) -> std::io::Result
     std::fs::write(path, format!("{updated}\n"))
 }
 
+/// Igual que `sync_bool_field` pero para un campo de texto (`field = "..."`)
+/// — pensado para `token`: cuando la nube regenera el secreto compartido de
+/// un servidor, este helper deja que el propio agente reciba el valor nuevo
+/// por el túnel de comandos (autenticación distinta a la que usa el token
+/// que se está reemplazando) y lo persista en su config.toml, en vez de
+/// quedarse con el viejo hasta que alguien lo note por un 401 silencioso.
+pub fn sync_string_field(path: &Path, field: &str, value: &str) -> std::io::Result<()> {
+    let contents = if path.exists() { std::fs::read_to_string(path)? } else { String::new() };
+
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    let target_line = format!("{field} = \"{escaped}\"");
+    let already_current = contents.lines().any(|l| l.trim_start() == target_line);
+    if already_current {
+        return Ok(());
+    }
+
+    let prefix = format!("{field} = ");
+    let updated = if contents.lines().any(|l| l.trim_start().starts_with(&prefix)) {
+        contents
+            .lines()
+            .map(|line| if line.trim_start().starts_with(&prefix) { target_line.clone() } else { line.to_string() })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else if contents.is_empty() {
+        target_line
+    } else {
+        format!("{}\n{target_line}", contents.trim_end())
+    };
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, format!("{updated}\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
