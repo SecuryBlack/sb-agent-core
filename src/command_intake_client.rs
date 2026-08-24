@@ -12,6 +12,9 @@ pub enum IntakeClientError {
     Write(std::io::Error),
     Read(std::io::Error),
     Parse(serde_json::Error),
+    /// No se pudo cargar el token compartido de autenticación (ver
+    /// `crate::intake_auth`) para estampar el envelope.
+    Auth(std::io::Error),
     /// El agente entendió el envelope pero no pudo ejecutarlo (p.ej.
     /// `command_type` desconocido, o timeout del lado del handler).
     Rejected(String),
@@ -26,6 +29,7 @@ impl std::fmt::Display for IntakeClientError {
             IntakeClientError::Write(e) => write!(f, "could not write command envelope: {e}"),
             IntakeClientError::Read(e) => write!(f, "could not read from command intake: {e}"),
             IntakeClientError::Parse(e) => write!(f, "could not parse intake response: {e}"),
+            IntakeClientError::Auth(e) => write!(f, "could not load shared auth token: {e}"),
             IntakeClientError::Rejected(msg) => write!(f, "command rejected: {msg}"),
             IntakeClientError::NoResponse => write!(f, "command intake closed without a final response"),
         }
@@ -37,12 +41,20 @@ impl std::error::Error for IntakeClientError {}
 /// Manda `envelope` al intake de `agent_name` y bloquea hasta la respuesta
 /// final. Cada `CommandProgress` recibido en el camino se pasa a
 /// `on_progress` a medida que llega.
+///
+/// `envelope.auth_token` se sobrescribe siempre con el token compartido de
+/// la máquina (`crate::intake_auth::ensure_token`) — el llamante no
+/// necesita conocer ese detalle, igual que el core sella `command_id` en
+/// cada `CommandProgress` sin que el handler tenga que hacerlo.
 pub fn send_command(
     agent_name: &str,
     envelope: &CommandEnvelope,
     on_progress: impl FnMut(CommandProgress),
 ) -> Result<CommandResponse, IntakeClientError> {
-    platform::send_command(agent_name, envelope, on_progress)
+    let token = crate::intake_auth::ensure_token().map_err(IntakeClientError::Auth)?;
+    let mut envelope = envelope.clone();
+    envelope.auth_token = token;
+    platform::send_command(agent_name, &envelope, on_progress)
 }
 
 /// Una línea del socket es progreso, respuesta final, o un rechazo — se

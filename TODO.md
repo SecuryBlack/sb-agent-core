@@ -224,10 +224,23 @@ estado deseado.
        reenvía — el handler no lo conoce y no debería tener que pasarlo. Ahora `dispatch()`
        lo sella él mismo sobre cada progreso antes de reenviarlo, en vez de confiar en que
        cada handler (o cada consumidor que reenvíe progreso, como nexus) lo haga bien.
-       **Pendiente, bloqueante antes de desplegar a producción de clientes:** autenticación del
-       socket — hoy confía en quien pueda conectarse localmente (grupo Unix compartido vs.
-       token en disco, sección "Autenticación del intake" del documento de diseño). Primer
-       consumidor real: handler `os_upgrade` en FerroSentry, hecho 2026-08-24.
+       Primer consumidor real: handler `os_upgrade` en FerroSentry, hecho 2026-08-24.
+       **Autenticación hecha 2026-08-24** — módulo nuevo `intake_auth.rs`: token compartido de
+       32 bytes aleatorios en `/etc/sb-agent/intake.token` (Unix, fichero `0600`) o
+       `%ProgramData%\sb-agent\intake.token` (Windows), generado por el primer agente que
+       arranca (creación atómica con `create_new`, para que dos agentes arrancando a la vez no
+       se pisen el token — bug real encontrado en los tests de integración, que corrían en
+       paralelo contra el mismo fichero). `CommandEnvelope` lleva ahora `auth_token: String`;
+       `command_intake_client::send_command` lo rellena solo (el llamante no necesita saber que
+       existe), y el servidor lo compara en tiempo constante antes de tocar `dispatch()` — un
+       envelope sin token válido nunca llega al registro de handlers. Sin esto el servidor del
+       intake ni siquiera arranca (falla `ensure_token()` → no se hace `bind`/`listen`).
+       Verificado con un test nuevo de rechazo (`command_intake_rejects_wrong_auth_token`) que
+       escribe el envelope a mano saltándose el cliente (que siempre estampa el token correcto).
+       **Deliberadamente fuera de esta pasada:** el grupo Unix compartido que el documento de
+       diseño mencionaba como defensa en profundidad extra — requiere decisiones de packaging
+       (crear el grupo `sb-agents`, añadir los usuarios de servicio correctos) que no tocan este
+       crate; el token ya cierra el hueco de autenticación por sí solo en ambos SO.
 
 ---
 

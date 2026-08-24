@@ -10,6 +10,7 @@ pub mod cli;
 pub mod command_intake;
 pub mod command_intake_client;
 pub mod config;
+pub mod intake_auth;
 pub mod logging;
 pub mod net;
 pub mod service;

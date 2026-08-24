@@ -9,10 +9,11 @@
 //! Ver `D:\infra\docs\design-command-intake.md` para el porqué de este
 //! diseño (cada agente ejecuta lo suyo; este crate solo enruta y da forma).
 //!
-//! Autenticación: pendiente de decidir (ver el documento de diseño,
-//! sección "Autenticación del intake"). Por ahora el socket confía en quien
-//! pueda conectarse localmente — no usar todavía para nada que un proceso
-//! sin privilegios no debería poder disparar.
+//! Autenticación: cada `CommandEnvelope` lleva un `auth_token` que debe
+//! coincidir con el token compartido de la máquina (`crate::intake_auth`).
+//! El servidor lo verifica antes de tocar el registro de handlers o el
+//! caché de idempotencia — un envelope sin token válido no llega a
+//! `CommandRegistry::dispatch`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -30,6 +31,12 @@ pub struct CommandEnvelope {
     pub payload: serde_json::Value,
     /// 0 = sin timeout propio; el core usa un default razonable.
     pub timeout_secs: u32,
+    /// Token compartido de la máquina (`crate::intake_auth::ensure_token`).
+    /// `command_intake_client::send_command` lo rellena solo — quien
+    /// construye el envelope a mano (tests, `main.rs`) puede dejarlo vacío
+    /// si va a mandarlo por un canal que ya lo estampa.
+    #[serde(default)]
+    pub auth_token: String,
 }
 
 /// Progreso intermedio de un comando largo (p.ej. `os_upgrade`). Un handler
@@ -81,6 +88,7 @@ pub struct CommandResponse {
 pub enum IntakeError {
     UnknownCommandType(String),
     Timeout,
+    Unauthorized,
 }
 
 impl std::fmt::Display for IntakeError {
@@ -88,6 +96,7 @@ impl std::fmt::Display for IntakeError {
         match self {
             IntakeError::UnknownCommandType(t) => write!(f, "unknown command_type: {t}"),
             IntakeError::Timeout => write!(f, "command timed out"),
+            IntakeError::Unauthorized => write!(f, "invalid or missing auth_token"),
         }
     }
 }
@@ -258,6 +267,16 @@ mod platform {
     }
 
     pub fn spawn_server(registry: CommandRegistry, socket_path: PathBuf) {
+        // Sin token no arrancamos: un intake de comandos sin autenticación
+        // es peor que no tenerlo (ver D:\infra\docs\design-command-intake.md).
+        let token: Arc<str> = match crate::intake_auth::ensure_token() {
+            Ok(t) => t.into(),
+            Err(e) => {
+                warn!(error = %e, "command intake: could not load shared auth token, not starting");
+                return;
+            }
+        };
+
         let _ = std::fs::remove_file(&socket_path);
         tokio::spawn(async move {
             let listener = match UnixListener::bind(&socket_path) {
@@ -276,12 +295,13 @@ mod platform {
                     }
                 };
                 let registry = registry.clone();
-                tokio::spawn(handle_connection(registry, stream));
+                let token = token.clone();
+                tokio::spawn(handle_connection(registry, token, stream));
             }
         });
     }
 
-    async fn handle_connection(registry: CommandRegistry, stream: tokio::net::UnixStream) {
+    async fn handle_connection(registry: CommandRegistry, token: Arc<str>, stream: tokio::net::UnixStream) {
         let (read_half, mut write_half) = stream.into_split();
         let mut reader = BufReader::new(read_half);
         let mut line = String::new();
@@ -298,15 +318,11 @@ mod platform {
             }
         };
 
-        run_and_reply(&registry, envelope, &mut write_half).await;
-    }
+        if !super::check_auth(&token, &envelope, &mut write_half).await {
+            return;
+        }
 
-    async fn run_and_reply<W: tokio::io::AsyncWrite + Unpin>(
-        registry: &CommandRegistry,
-        envelope: CommandEnvelope,
-        out: &mut W,
-    ) {
-        super::run_and_reply_generic(registry, envelope, out).await;
+        super::run_and_reply_generic(&registry, envelope, &mut write_half).await;
     }
 }
 
@@ -323,6 +339,14 @@ mod platform {
     }
 
     pub fn spawn_server(registry: CommandRegistry, pipe_name: String) {
+        let token: Arc<str> = match crate::intake_auth::ensure_token() {
+            Ok(t) => t.into(),
+            Err(e) => {
+                warn!(error = %e, "command intake: could not load shared auth token, not starting");
+                return;
+            }
+        };
+
         tokio::spawn(async move {
             loop {
                 let server = match ServerOptions::new().first_pipe_instance(false).create(&pipe_name) {
@@ -337,12 +361,17 @@ mod platform {
                     continue;
                 }
                 let registry = registry.clone();
-                tokio::spawn(handle_connection(registry, server));
+                let token = token.clone();
+                tokio::spawn(handle_connection(registry, token, server));
             }
         });
     }
 
-    async fn handle_connection(registry: CommandRegistry, pipe: tokio::net::windows::named_pipe::NamedPipeServer) {
+    async fn handle_connection(
+        registry: CommandRegistry,
+        token: Arc<str>,
+        pipe: tokio::net::windows::named_pipe::NamedPipeServer,
+    ) {
         let (read_half, mut write_half) = tokio::io::split(pipe);
         let mut reader = BufReader::new(read_half);
         let mut line = String::new();
@@ -359,8 +388,34 @@ mod platform {
             }
         };
 
+        if !super::check_auth(&token, &envelope, &mut write_half).await {
+            return;
+        }
+
         super::run_and_reply_generic(&registry, envelope, &mut write_half).await;
     }
+}
+
+/// Verifica `envelope.auth_token` contra el token compartido de la máquina.
+/// Si no coincide, escribe la misma forma de error que usa
+/// `run_and_reply_generic` (`{"error": "..."}`) y cierra — el llamante no
+/// debe seguir hacia `dispatch` en ese caso. Devuelve `true` si puede
+/// continuar.
+async fn check_auth<W: tokio::io::AsyncWrite + Unpin>(token: &str, envelope: &CommandEnvelope, out: &mut W) -> bool {
+    use tokio::io::AsyncWriteExt;
+
+    if crate::intake_auth::constant_time_eq(token, &envelope.auth_token) {
+        return true;
+    }
+
+    tracing::warn!(command_id = %envelope.command_id, "command intake: rejected envelope with invalid auth_token");
+    let err = serde_json::json!({ "error": IntakeError::Unauthorized.to_string() });
+    if let Ok(mut json) = serde_json::to_vec(&err) {
+        json.push(b'\n');
+        let _ = out.write_all(&json).await;
+    }
+    let _ = out.shutdown().await;
+    false
 }
 
 /// Corre el comando y escribe al peer: cero o más líneas `CommandProgress`
@@ -440,6 +495,7 @@ mod tests {
             command_type: "echo".to_string(),
             payload: serde_json::json!({"hello": "world"}),
             timeout_secs: 5,
+            auth_token: String::new(),
         };
 
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -456,6 +512,7 @@ mod tests {
             command_type: "does_not_exist".to_string(),
             payload: serde_json::Value::Null,
             timeout_secs: 5,
+            auth_token: String::new(),
         };
 
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -481,6 +538,7 @@ mod tests {
             command_type: "count".to_string(),
             payload: serde_json::Value::Null,
             timeout_secs: 5,
+            auth_token: String::new(),
         };
 
         let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel();
@@ -509,6 +567,7 @@ mod tests {
             command_type: "slow".to_string(),
             payload: serde_json::Value::Null,
             timeout_secs: 5,
+            auth_token: String::new(),
         };
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();

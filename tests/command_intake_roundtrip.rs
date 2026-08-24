@@ -26,6 +26,7 @@ async fn command_intake_roundtrip_with_progress() {
         command_type: "echo_upper".to_string(),
         payload: serde_json::json!({"text": "hola"}),
         timeout_secs: 5,
+        auth_token: String::new(),
     };
 
     let agent_name_owned = agent_name.to_string();
@@ -58,6 +59,7 @@ async fn command_intake_reports_unknown_command_type() {
         command_type: "does_not_exist".to_string(),
         payload: serde_json::Value::Null,
         timeout_secs: 5,
+        auth_token: String::new(),
     };
 
     let agent_name_owned = agent_name.to_string();
@@ -67,4 +69,61 @@ async fn command_intake_reports_unknown_command_type() {
 
     let err = result.expect_err("unknown command_type should be rejected");
     assert!(matches!(err, sb_agent_core::command_intake_client::IntakeClientError::Rejected(_)));
+}
+
+/// `send_command` siempre estampa el token correcto, así que para probar el
+/// rechazo hay que escribir el envelope a mano por el socket/pipe, saltando
+/// el cliente de más arriba.
+#[tokio::test]
+async fn command_intake_rejects_wrong_auth_token() {
+    let agent_name = "test-cmd-roundtrip-badtoken-agent";
+    let registry = CommandRegistry::new();
+    registry.register("echo", |payload, _progress| async move { CommandOutcome::ok(payload.to_string()) });
+    spawn_server(registry, default_socket_path(agent_name));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let envelope = CommandEnvelope {
+        command_id: "roundtrip-3".to_string(),
+        command_type: "echo".to_string(),
+        payload: serde_json::Value::Null,
+        timeout_secs: 5,
+        auth_token: "definitely-not-the-real-token".to_string(),
+    };
+
+    let line = tokio::task::spawn_blocking(move || {
+        let mut line = serde_json::to_vec(&envelope).unwrap();
+        line.push(b'\n');
+        line
+    })
+    .await
+    .unwrap();
+
+    let response_text = tokio::task::spawn_blocking(move || raw_send(agent_name, &line)).await.unwrap();
+
+    assert!(response_text.contains("error"), "expected an error line, got: {response_text}");
+    assert!(response_text.contains("auth_token"), "expected the auth_token rejection reason, got: {response_text}");
+}
+
+#[cfg(unix)]
+fn raw_send(agent_name: &str, line: &[u8]) -> String {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(default_socket_path(agent_name)).unwrap();
+    stream.write_all(line).unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut out = String::new();
+    stream.read_to_string(&mut out).unwrap();
+    out
+}
+
+#[cfg(windows)]
+fn raw_send(agent_name: &str, line: &[u8]) -> String {
+    use std::io::{Read, Write};
+
+    let mut file = std::fs::OpenOptions::new().read(true).write(true).open(default_socket_path(agent_name)).unwrap();
+    file.write_all(line).unwrap();
+    let mut out = String::new();
+    file.read_to_string(&mut out).unwrap();
+    out
 }
