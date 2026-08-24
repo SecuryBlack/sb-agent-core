@@ -95,6 +95,42 @@ pub fn sync_version_field(path: &Path, current_version: &str) -> std::io::Result
     std::fs::write(path, updated)
 }
 
+/// Igual que `sync_version_field` pero genérico para un campo booleano
+/// cualquiera (`field = true`/`false`) — pensado para ajustes que la nube
+/// puede pedir cambiar en remoto vía comando (p.ej.
+/// `allow_remote_os_upgrade`), no solo la versión que el propio agente se
+/// escribe a sí mismo. Crea el fichero (y sus directorios) si no existe
+/// todavía, a diferencia de `sync_version_field` — aquí sí puede ser la
+/// primera escritura real de config de un agente instalado sin fichero
+/// previo.
+pub fn sync_bool_field(path: &Path, field: &str, value: bool) -> std::io::Result<()> {
+    let contents = if path.exists() { std::fs::read_to_string(path)? } else { String::new() };
+
+    let target_line = format!("{field} = {value}");
+    let already_current = contents.lines().any(|l| l.trim_start() == target_line);
+    if already_current {
+        return Ok(());
+    }
+
+    let prefix = format!("{field} = ");
+    let updated = if contents.lines().any(|l| l.trim_start().starts_with(&prefix)) {
+        contents
+            .lines()
+            .map(|line| if line.trim_start().starts_with(&prefix) { target_line.clone() } else { line.to_string() })
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else if contents.is_empty() {
+        target_line
+    } else {
+        format!("{}\n{target_line}", contents.trim_end())
+    };
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, format!("{updated}\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +186,61 @@ mod tests {
     fn sync_version_field_noop_on_missing_file() {
         let path = Path::new("/nonexistent/sb-agent-core-test/config.toml");
         assert!(sync_version_field(path, "1.2.3").is_ok());
+    }
+
+    #[test]
+    fn sync_bool_field_adds_missing_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "endpoint = \"https://x\"\n").unwrap();
+        sync_bool_field(&path, "allow_remote_os_upgrade", true).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("allow_remote_os_upgrade = true"));
+        assert!(contents.contains("endpoint = \"https://x\""));
+    }
+
+    #[test]
+    fn sync_bool_field_replaces_existing_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "allow_remote_os_upgrade = false\nendpoint = \"https://x\"\n").unwrap();
+        sync_bool_field(&path, "allow_remote_os_upgrade", true).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("allow_remote_os_upgrade = true"));
+        assert!(!contents.contains("allow_remote_os_upgrade = false"));
+    }
+
+    #[test]
+    fn sync_bool_field_is_noop_when_already_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "allow_remote_os_upgrade = true\n").unwrap();
+        sync_bool_field(&path, "allow_remote_os_upgrade", true).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "allow_remote_os_upgrade = true\n");
+    }
+
+    /// Reproduce el incidente real: un fichero sin salto de línea final no
+    /// debe acabar con la línea nueva pegada a la última (lo que rompió
+    /// `ferro-sentry`'s config.toml en producción cuando se editó a mano con
+    /// `echo >>` en vez de con esta función).
+    #[test]
+    fn sync_bool_field_handles_missing_trailing_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "endpoint = \"https://x\"").unwrap(); // sin \n final
+        sync_bool_field(&path, "allow_remote_os_upgrade", true).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("endpoint = \"https://x\"\nallow_remote_os_upgrade = true\n"));
+        toml::from_str::<toml::Value>(&contents).expect("resulting file must still be valid TOML");
+    }
+
+    #[test]
+    fn sync_bool_field_creates_file_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("config.toml");
+        sync_bool_field(&path, "allow_remote_os_upgrade", true).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "allow_remote_os_upgrade = true\n");
     }
 }
