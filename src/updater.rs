@@ -83,6 +83,14 @@ pub fn start_daily_check(cfg: UpdaterConfig) {
     });
 }
 
+/// Igual que la comprobación que hace el loop de fondo, pero expuesta para
+/// que un agente pueda dispararla bajo demanda (p.ej. un command_type
+/// `update_now` recibido por el intake, para el botón "Actualizar" de la
+/// app) sin esperar al próximo `check_interval`.
+pub fn check_now(cfg: &UpdaterConfig) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    check_and_update(cfg)
+}
+
 fn check_and_update(cfg: &UpdaterConfig) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let target = self_update::get_target();
 
