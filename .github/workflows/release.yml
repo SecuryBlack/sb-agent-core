@@ -108,7 +108,13 @@ jobs:
           STAGE="$(mktemp -d)"
           cp "target/${{ matrix.target }}/release/${{ inputs.binary-name }}" "$STAGE/"
           for f in ${{ inputs.extra-files }}; do cp "$f" "$STAGE/"; done
-          tar czf "${ASSET}.tar.gz" -C "$STAGE" .
+          # `tar -C "$STAGE" .` empaqueta las entradas como "./ferro-sentry"
+          # (con el prefijo "./"), pero `self_update` busca la ruta exacta
+          # del binario sin ese prefijo dentro del archivo — el auto-update
+          # fallaba en todos los agentes con "Could not find the required
+          # path in the archive". Listar los ficheros explícitamente evita
+          # el prefijo.
+          tar czf "${ASSET}.tar.gz" -C "$STAGE" $(cd "$STAGE" && ls)
           sha256sum "${ASSET}.tar.gz" > "${ASSET}.tar.gz.sha256"
           echo "ASSET_PATH=${ASSET}.tar.gz" >> "$GITHUB_ENV"
           echo "CHECKSUM_PATH=${ASSET}.tar.gz.sha256" >> "$GITHUB_ENV"
