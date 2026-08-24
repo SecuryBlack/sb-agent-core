@@ -209,6 +209,25 @@ estado deseado.
          en `tests/status_roundtrip.rs`, aparte de probar en caliente contra un OxiPulse
          real corriendo en la máquina de desarrollo.
        - **Nivel 3 (TUI de flota) sigue descartado**, como decía el diseño original.
+7. [~] **Intake de comandos** — contraparte del status socket, en la otra dirección. Ver
+       `D:\infra\docs\design-command-intake.md` para el porqué (cada agente ejecuta lo suyo;
+       Nexus enruta, no interpreta). Módulo `command_intake.rs` hecho 2026-08-24: socket/pipe
+       separado del de status, `CommandRegistry` con handlers registrados por `command_type`
+       (payload libre, el core no lo interpreta), timeout por comando, idempotencia por
+       `command_id` (últimos 256 recordados), y `CommandProgress` para operaciones largas
+       (streaming línea a línea antes del `CommandResponse` final). `command_intake_client.rs`
+       — cliente síncrono, mismo estilo que `status_client.rs`, para que Nexus lo llame desde
+       `spawn_blocking` al reenviar un comando del túnel al intake local del agente destino.
+       Verificado con test de extremo a extremo real (socket real, progreso incluido) en
+       `tests/command_intake_roundtrip.rs`, además de los 4 tests unitarios de `dispatch()`.
+       **Fix 2026-08-24:** `dispatch()` no sellaba `command_id` en los `CommandProgress` que
+       reenvía — el handler no lo conoce y no debería tener que pasarlo. Ahora `dispatch()`
+       lo sella él mismo sobre cada progreso antes de reenviarlo, en vez de confiar en que
+       cada handler (o cada consumidor que reenvíe progreso, como nexus) lo haga bien.
+       **Pendiente, bloqueante antes de desplegar a producción de clientes:** autenticación del
+       socket — hoy confía en quien pueda conectarse localmente (grupo Unix compartido vs.
+       token en disco, sección "Autenticación del intake" del documento de diseño). Primer
+       consumidor real: handler `os_upgrade` en FerroSentry, hecho 2026-08-24.
 
 ---
 

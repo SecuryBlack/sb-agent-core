@@ -7,6 +7,8 @@
 
 pub mod buffer;
 pub mod cli;
+pub mod command_intake;
+pub mod command_intake_client;
 pub mod config;
 pub mod logging;
 pub mod net;
