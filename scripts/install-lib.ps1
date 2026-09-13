@@ -26,6 +26,7 @@ $SbAgentLabel = if ($SbAgentLabel) { $SbAgentLabel } else { "sb-agent" }
 # Set TLS 1.2 for PowerShell 5.1 compatibility on Windows Server — necesario en
 # todos los agentes, no solo en el que lo tenía escrito.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 function Write-SbInfo    { param($msg) Write-Host "[$SbAgentLabel] $msg" -ForegroundColor Cyan }
@@ -38,6 +39,28 @@ function Assert-SbAdmin {
     $currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
     if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         Invoke-SbFail "This script must be run as Administrator. Right-click PowerShell and select 'Run as Administrator'."
+    }
+}
+
+function Assert-SbVcRuntime {
+    $vcDll = Join-Path $env:SystemRoot "System32\vcruntime140.dll"
+    if (-not (Test-Path $vcDll)) {
+        Write-SbInfo "Visual C++ Runtime no detectado (comun en Windows Server limpio). Descargando e instalando..."
+        $vcUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+        $vcTmp = Join-Path ([System.IO.Path]::GetTempPath()) "vc_redist.x64.exe"
+        try {
+            Invoke-WebRequest -Uri $vcUrl -OutFile $vcTmp -UseBasicParsing
+            $proc = Start-Process -FilePath $vcTmp -ArgumentList "/install /quiet /norestart" -PassThru -Wait
+            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
+                Write-SbSuccess "Visual C++ Runtime instalado con exito."
+            } else {
+                Write-SbWarn "Instalador de Visual C++ finalizo con codigo: $($proc.ExitCode)"
+            }
+        } catch {
+            Write-SbWarn "No se pudo instalar Visual C++ Runtime automaticamente: $($_.Exception.Message)"
+        } finally {
+            Remove-Item -Path $vcTmp -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -110,6 +133,8 @@ function Install-SbBinaryFromZip {
         [Parameter(Mandatory)][string]$InstallDir,
         [Parameter(Mandatory)][string]$ServiceName
     )
+    Assert-SbVcRuntime
+
     if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
         Write-SbInfo "Stopping existing service '$ServiceName'..."
         Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
