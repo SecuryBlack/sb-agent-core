@@ -26,15 +26,25 @@ pub fn init(agent_name: &str, log_dir: &Path, default_level: &str) {
 
     if writable {
         clean_old_logs(log_dir, Duration::from_secs(7 * 24 * 3600));
-        let file_appender = tracing_appender::rolling::daily(log_dir, format!("{agent_name}.log"));
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter())
-            .with_writer(file_appender)
-            .with_ansi(false)
-            .init();
-    } else {
-        tracing_subscriber::fmt().with_env_filter(env_filter()).init();
+        match tracing_appender::rolling::RollingFileAppender::builder()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix(format!("{agent_name}.log"))
+            .build(log_dir)
+        {
+            Ok(file_appender) => {
+                tracing_subscriber::fmt()
+                    .with_env_filter(env_filter())
+                    .with_writer(file_appender)
+                    .with_ansi(false)
+                    .init();
+                return;
+            }
+            Err(e) => {
+                eprintln!("[{agent_name}] warning: could not initialize log file ({e}), falling back to stdout");
+            }
+        }
     }
+    tracing_subscriber::fmt().with_env_filter(env_filter()).init();
 }
 
 fn clean_old_logs(log_dir: &Path, max_age: Duration) {

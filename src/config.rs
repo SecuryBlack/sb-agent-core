@@ -42,6 +42,14 @@ pub fn default_config_path(agent_name: &str) -> PathBuf {
     }
 }
 
+fn read_file_to_string_lossy(path: &Path) -> std::io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    match String::from_utf8(bytes) {
+        Ok(s) => Ok(s),
+        Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
+    }
+}
+
 /// Parsea `config.toml` directamente al `struct Config` propio del agente vía
 /// serde. El agente aplica overrides de variables de entorno después —
 /// esos nombres de variable (`OXIPULSE_ENDPOINT`, etc.) son suyos, no de aquí.
@@ -53,7 +61,7 @@ pub fn load<T: DeserializeOwned + Default>(path: &Path) -> Result<T, ConfigError
     if !path.exists() {
         return Ok(T::default());
     }
-    let contents = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
+    let contents = read_file_to_string_lossy(path).map_err(ConfigError::Io)?;
     toml::from_str(&contents).map_err(|e| ConfigError::Parse(e.to_string()))
 }
 
@@ -69,7 +77,7 @@ pub fn sync_version_field(path: &Path, current_version: &str) -> std::io::Result
     if !path.exists() {
         return Ok(());
     }
-    let contents = std::fs::read_to_string(path)?;
+    let contents = read_file_to_string_lossy(path)?;
     let already_current = contents
         .lines()
         .any(|l| l.trim_start() == format!("version = \"{current_version}\""));
@@ -104,7 +112,7 @@ pub fn sync_version_field(path: &Path, current_version: &str) -> std::io::Result
 /// primera escritura real de config de un agente instalado sin fichero
 /// previo.
 pub fn sync_bool_field(path: &Path, field: &str, value: bool) -> std::io::Result<()> {
-    let contents = if path.exists() { std::fs::read_to_string(path)? } else { String::new() };
+    let contents = if path.exists() { read_file_to_string_lossy(path)? } else { String::new() };
 
     let target_line = format!("{field} = {value}");
     let already_current = contents.lines().any(|l| l.trim_start() == target_line);
@@ -138,7 +146,7 @@ pub fn sync_bool_field(path: &Path, field: &str, value: bool) -> std::io::Result
 /// que se está reemplazando) y lo persista en su config.toml, en vez de
 /// quedarse con el viejo hasta que alguien lo note por un 401 silencioso.
 pub fn sync_string_field(path: &Path, field: &str, value: &str) -> std::io::Result<()> {
-    let contents = if path.exists() { std::fs::read_to_string(path)? } else { String::new() };
+    let contents = if path.exists() { read_file_to_string_lossy(path)? } else { String::new() };
 
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
     let target_line = format!("{field} = \"{escaped}\"");
@@ -191,6 +199,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "endpoint = \"https://x\"\ninterval_secs = 30\n").unwrap();
+        let cfg: FakeConfig = load(&path).unwrap();
+        assert_eq!(cfg.endpoint.as_deref(), Some("https://x"));
+        assert_eq!(cfg.interval_secs, Some(30));
+    }
+
+    #[test]
+    fn load_handles_non_utf8_lossy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Byte 0x97 es el em-dash en Windows-1252 (ANSI), inválido en UTF-8 estándar.
+        let raw_bytes = b"# Do not share this file \x97 it contains your auth token.\nendpoint = \"https://x\"\ninterval_secs = 30\n";
+        std::fs::write(&path, raw_bytes).unwrap();
         let cfg: FakeConfig = load(&path).unwrap();
         assert_eq!(cfg.endpoint.as_deref(), Some("https://x"));
         assert_eq!(cfg.interval_secs, Some(30));
