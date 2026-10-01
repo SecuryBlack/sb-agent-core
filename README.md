@@ -2,6 +2,10 @@
 
 Shared runtime and foundational utilities for SecuryBlack native Rust agents (OxiPulse, FerroSentry, CupraFlow, CromoForge, TitanVault, Nexus Agent). Not an agent itself — it provides the core foundation that prevents re-implementing identical primitives across separate open-source repositories.
 
+## Developer entry points
+
+This repository is a shared library, not an installable monitoring agent. Start with [OxiPulse](https://github.com/SecuryBlack/oxi-pulse) for server telemetry or [FerroSentry](https://github.com/SecuryBlack/ferro-sentry) for security auditing.
+
 > **Status:** Active development. Reusable CI/installation infrastructure (reusable GitHub release workflows + shared installer libraries) is actively consumed across agents. The Rust crate modules (configuration, logging, service wrappers, updater, status sockets) are currently in active rollout.
 
 ---
@@ -42,17 +46,16 @@ No metric collectors, no security rules, no backup logic, and no deploy engines.
 
 ## Consuming Agents
 
-| Agent | Current Modules Used |
-|---|---|
-| [OxiPulse](https://github.com/SecuryBlack/oxi-pulse) | Release workflow, install-lib |
-| [FerroSentry](https://github.com/SecuryBlack/ferro-sentry) | Release workflow, install-lib |
-| [CupraFlow](https://github.com/SecuryBlack/cupra-flow) | Release workflow, install-lib |
-| [TitanVault](https://github.com/SecuryBlack/titan-vault) | Crate foundation, release workflow, install-lib |
-| [CromoForge](https://github.com/SecuryBlack/cromo-forge) | Crate foundation, release workflow, install-lib |
-| [Nexus Agent](https://github.com/SecuryBlack/nexus-agent) | Release workflow, install-lib |
+Nexus, OxiPulse, FerroSentry, CupraFlow, CromoForge and TitanVault declare a dependency on the Rust crate. Runtime adoption and resolved revisions are documented in the [workspace architecture](../sb-wiki/Tecnica/Arquitectura.md); use each Cargo.toml/Cargo.lock for executable dependency resolution.
+
+The [wiki](../sb-wiki/Índice.md) owns shared product status, decisions and pending work. Keep runtime API and install/CI instructions in this repository.
 
 ---
 
 ## License
 
 sb-agent-core is licensed under the [Apache License, Version 2.0](LICENSE).
+
+## Maintainer context (workspace)
+
+English is the primary language for this repository's public documentation. Shared product decisions, commercial terms and the backlog live in the [workspace wiki](../sb-wiki/Índice.md), [current state](../sb-wiki/Producto/Estado%20actual.md) and [product log](../sb-wiki/Producto/Bitácora.md). These links require `sb-wiki` as a sibling checkout. Keep agent-specific usage and technical contracts here; update shared decisions in the wiki.
