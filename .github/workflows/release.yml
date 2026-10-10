@@ -55,6 +55,14 @@ on:
         required: false
         type: string
         default: ""
+      draft:
+        description: >
+          Crea la release como borrador. Sirve para que el repo del agente añada
+          más assets (p. ej. .deb/.rpm) y la publique después: con releases
+          inmutables no se pueden subir assets a una release ya publicada.
+        required: false
+        type: boolean
+        default: false
       extra-files:
         description: >
           Rutas (separadas por espacio, relativas al repo) a empaquetar junto
@@ -192,4 +200,5 @@ jobs:
         with:
           files: artifacts/**
           generate_release_notes: true
+          draft: ${{ inputs.draft }}
           fail_on_unmatched_files: true
