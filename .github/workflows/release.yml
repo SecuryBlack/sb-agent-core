@@ -47,6 +47,14 @@ on:
         required: false
         type: boolean
         default: false
+      glibc:
+        description: >
+          Versión mínima de glibc para los targets *-linux-gnu (ej. "2.17").
+          Compila con cargo-zigbuild para que el binario arranque en distros
+          antiguas; vacío = cargo build en ubuntu-latest (exige su glibc, 2.39).
+        required: false
+        type: string
+        default: ""
       extra-files:
         description: >
           Rutas (separadas por espacio, relativas al repo) a empaquetar junto
@@ -76,8 +84,20 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install Zig
+        if: inputs.glibc != '' && contains(matrix.target, 'linux-gnu')
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: inputs.glibc != '' && contains(matrix.target, 'linux-gnu')
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
       - name: Install aarch64 cross-compilation toolchain
-        if: matrix.cross == true
+        if: matrix.cross == true && !(inputs.glibc != '' && contains(matrix.target, 'linux-gnu'))
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y gcc-aarch64-linux-gnu
@@ -97,7 +117,14 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           RUSTFLAGS: ${{ (inputs.windows-static-crt && matrix.target == 'x86_64-pc-windows-msvc') && '-C target-feature=+crt-static' || '' }}
-        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.cargo-features || '' }}
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.glibc }}" ] && [[ "${{ matrix.target }}" == *linux-gnu ]]; then
+            unset CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER
+            cargo zigbuild --release --target "${{ matrix.target }}.${{ inputs.glibc }}" ${{ matrix.cargo-features || '' }}
+          else
+            cargo build --release --target ${{ matrix.target }} ${{ matrix.cargo-features || '' }}
+          fi
 
       # ── Linux packaging ──────────────────────────────────────────────────
       - name: Package (Linux tar.gz)
