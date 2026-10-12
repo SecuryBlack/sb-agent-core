@@ -33,7 +33,7 @@ pub fn run_top(agent_name: &str) -> std::io::Result<()> {
     result
 }
 
-fn event_loop<B: ratatui::backend::Backend>(
+fn event_loop<B: ratatui::backend::Backend<Error = std::io::Error>>(
     terminal: &mut Terminal<B>,
     agent_name: &str,
 ) -> std::io::Result<()> {
