@@ -15,7 +15,7 @@ tracing-appender = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
-self_update = { version = "0.42", default-features = false, features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
+self_update = { version = "0.42", default-features = false, features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate", "signatures"] }
 ratatui = "0.30"
 crossterm = "0.28"
 rand = "0.8"
@@ -25,3 +25,4 @@ windows-service = "0.7"
 
 [dev-dependencies]
 tempfile = "3"
+zipsign-api = { version = "0.1", default-features = false, features = ["sign-tar", "verify-tar"] }
