@@ -22,7 +22,8 @@ SecuryBlack Rust agents are intentionally separate repositories — each has its
 
 ### CI & Installation Infrastructure (In Production)
 
-- **`.github/workflows/release.yml`** — Reusable cross-target CI/CD release pipeline (`workflow_call`): multi-target compilation, tar.gz/zip packaging, SHA-256 checksum generation, and automated GitHub Releases publishing.
+- **`.github/workflows/release.yml`** — Reusable cross-target CI/CD release pipeline (`workflow_call`): multi-target compilation, tar.gz/zip packaging, SHA-256 checksum generation, and a **draft** GitHub Release (published only after offline signing, see [Releases firmadas](#releases-firmadas)).
+- **`scripts/sign-release.sh`** — Signs a draft release's archives with the offline ed25519 key and re-uploads them.
 - **`scripts/install-lib.sh`** / **`scripts/install-lib.ps1`** — Shared cross-platform installer functions: formatted logging, CPU architecture detection, dynamic release resolution, checksum verification, binary placement, and service registration.
 
 ### Rust Shared Crate Modules
@@ -30,9 +31,21 @@ SecuryBlack Rust agents are intentionally separate repositories — each has its
 - Strongly-typed configuration parsing (TOML + env vars + OS paths).
 - Structured logging with file rotation (`tracing` + `tracing-appender`).
 - Operating system service wrappers: systemd & Windows SCM.
-- Parameterized auto-updater from GitHub Releases (`self_update`).
+- Parameterized auto-updater from GitHub Releases (`self_update`), accepting only ed25519-signed archives.
 - Offline ring buffer with exponential backoff.
 - **Local Status Socket** — Unix domain socket / Windows named pipe exposing runtime state as JSON for `<agent> status`, `<agent> top`, and local discovery.
+
+---
+
+## Releases firmadas
+
+Los agentes corren como root y se actualizan solos, así que el updater (desde 0.3) solo instala archivos firmados con zipsign (ed25519) por una de las dos claves de `updater::VERIFYING_KEYS`. Las claves privadas no viven en GitHub: quien comprometa la org no puede publicar un binario que los agentes acepten.
+
+1. **Borrador** — el tag dispara `release.yml`, que compila y deja la release siempre en borrador (invisible para agentes e instaladores).
+2. **Firma** — quien custodia la clave ejecuta en su máquina `scripts/sign-release.sh <owner/repo> <tag>`: firma cada `.tar.gz`/`.zip` (contexto = nombre del asset), regenera los `.sha256`, verifica y resube.
+3. **Publicar** — `gh release edit <tag> -R <owner/repo> --draft=false` (o `--publish` en el script). Ningún workflow de un agente debe publicar por su cuenta.
+
+Claves: convención `~/.sb-signing/sb-release-primary.{priv,pub}` (la que firma) y `sb-release-backup.*` (respaldo, guardada aparte; sirve para rotar si la principal se pierde o se compromete). Requiere `gh` autenticado y `cargo install zipsign`.
 
 ---
 

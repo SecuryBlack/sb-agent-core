@@ -27,6 +27,22 @@ name: Reusable Rust Agent Release
 #             {"target":"x86_64-pc-windows-msvc","os":"windows-latest","archive_ext":"zip","cross":false}
 #           ]
 #         windows-static-crt: true   # solo OxiPulse lo necesitaba hoy
+#
+# Releases firmadas: la release se crea SIEMPRE como borrador. Los agentes
+# (sb-agent-core >= 0.3) solo aceptan archivos firmados con una clave ed25519
+# que no vive en GitHub, así que CI no puede firmar ni debe publicar. Flujo:
+#
+#   1. push del tag -> este workflow compila y deja la release en borrador
+#      (invisible para los agentes y para los instaladores, que usan /latest).
+#   2. quien custodia la clave ejecuta, en su máquina:
+#        scripts/sign-release.sh securyblack/<repo> <tag> [--publish]
+#      que firma cada .tar.gz/.zip, regenera los .sha256 y los resube.
+#   3. publicar el borrador (lo hace --publish, o a mano con
+#      `gh release edit <tag> -R <repo> --draft=false`).
+#
+# Ningún job del repo del agente debe publicar la release por su cuenta
+# (`gh release edit --draft=false`): saldría un binario sin firmar que los
+# agentes rechazarían, y con releases inmutables ya no se puede arreglar.
 
 on:
   workflow_call:
@@ -57,12 +73,12 @@ on:
         default: ""
       draft:
         description: >
-          Crea la release como borrador. Sirve para que el repo del agente añada
-          más assets (p. ej. .deb/.rpm) y la publique después: con releases
-          inmutables no se pueden subir assets a una release ya publicada.
+          OBSOLETO, se ignora: la release sale siempre como borrador para
+          firmarla antes de publicar. Se mantiene para no romper a los agentes
+          que aún lo pasan (workflow_call falla con inputs desconocidos).
         required: false
         type: boolean
-        default: false
+        default: true
       extra-files:
         description: >
           Rutas (separadas por espacio, relativas al repo) a empaquetar junto
@@ -181,7 +197,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish GitHub Release
+    name: Create draft GitHub Release
     needs: build
     runs-on: ubuntu-latest
 
@@ -200,5 +216,6 @@ jobs:
         with:
           files: artifacts/**
           generate_release_notes: true
-          draft: ${{ inputs.draft }}
+          # Siempre borrador: se publica tras firmar (ver cabecera).
+          draft: true
           fail_on_unmatched_files: true
