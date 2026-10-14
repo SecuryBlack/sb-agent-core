@@ -80,9 +80,8 @@ sb_fetch_latest_version() {
 
 # ─── Descarga + verificación de checksum ─────────────────────────────────────
 # sb_download_and_verify "$DOWNLOAD_URL" "$OUT_FILE"
-# Descarga $OUT_FILE y, si existe "$DOWNLOAD_URL.sha256", lo verifica.
-# La ausencia de checksum es un warning, no un error (mismo comportamiento que
-# los 3 instaladores existentes hoy).
+# Descarga $OUT_FILE y lo verifica contra "$DOWNLOAD_URL.sha256". Sin .sha256
+# no se instala: todas las releases lo publican, así que si falta algo va mal.
 sb_download_and_verify() {
   local url="$1" out="$2" asset_name
   asset_name="$(basename "$out")"
@@ -91,17 +90,15 @@ sb_download_and_verify() {
   curl -fsSL "$url" -o "$out" \
     || sb_die "Download failed. Is the release published with the expected asset name?"
 
-  if curl -fsSL "${url}.sha256" -o "${out}.sha256" 2>/dev/null; then
-    sb_info "Verifying checksum…"
-    # El .sha256 trae el nombre del asset original; sha256sum -c compara por
-    # nombre de fichero, así que hay que ejecutarlo desde el mismo directorio
-    # y con el nombre que trae el checksum, no el path completo.
-    (cd "$(dirname "$out")" && sha256sum -c "$(basename "${out}.sha256")" --quiet) \
-      || sb_die "Checksum verification failed"
-    sb_success "Checksum OK"
-  else
-    sb_warn "No checksum file found, skipping verification"
-  fi
+  curl -fsSL "${url}.sha256" -o "${out}.sha256" 2>/dev/null \
+    || sb_die "Checksum file not found (${asset_name}.sha256). Refusing to install an unverified binary."
+  sb_info "Verifying checksum…"
+  # El .sha256 trae el nombre del asset original; sha256sum -c compara por
+  # nombre de fichero, así que hay que ejecutarlo desde el mismo directorio
+  # y con el nombre que trae el checksum, no el path completo.
+  (cd "$(dirname "$out")" && sha256sum -c "$(basename "${out}.sha256")" --quiet) \
+    || sb_die "Checksum verification failed"
+  sb_success "Checksum OK"
 }
 
 # ─── Instalación del binario desde un .tar.gz ────────────────────────────────

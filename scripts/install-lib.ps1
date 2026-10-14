@@ -93,8 +93,9 @@ function Get-SbLatestVersion {
 }
 
 # ─── Descarga + verificación de checksum ─────────────────────────────────────
-# Descarga $AssetName al $TmpDir y verifica su .sha256 si existe (warning, no
-# error, si no existe — igual que en Linux). Devuelve la ruta al zip descargado.
+# Descarga $AssetName al $TmpDir y verifica su .sha256. Sin .sha256 no se
+# instala: todas las releases lo publican, así que si falta algo va mal.
+# Devuelve la ruta al zip descargado.
 function Get-SbReleaseAsset {
     param(
         [Parameter(Mandatory)][string]$GithubRepo,
@@ -109,16 +110,16 @@ function Get-SbReleaseAsset {
     Write-SbInfo "Downloading $AssetName..."
     Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing
 
+    $checksumFile = "$zipPath.sha256"
     try {
-        $checksumFile = "$zipPath.sha256"
         Invoke-WebRequest -Uri $checksumUrl -OutFile $checksumFile -UseBasicParsing
-        $expected = (Get-Content $checksumFile).Split(" ")[0].Trim().ToLower()
-        $actual   = (Get-FileHash -Algorithm SHA256 $zipPath).Hash.ToLower()
-        if ($expected -ne $actual) { Invoke-SbFail "Checksum mismatch. Download may be corrupted." }
-        Write-SbSuccess "Checksum OK"
     } catch {
-        Write-SbWarn "No checksum file found, skipping verification"
+        Invoke-SbFail "Checksum file not found ($AssetName.sha256). Refusing to install an unverified binary."
     }
+    $expected = (Get-Content $checksumFile).Split(" ")[0].Trim().ToLower()
+    $actual   = (Get-FileHash -Algorithm SHA256 $zipPath).Hash.ToLower()
+    if ($expected -ne $actual) { Invoke-SbFail "Checksum mismatch. Download may be corrupted." }
+    Write-SbSuccess "Checksum OK"
 
     return $zipPath
 }
