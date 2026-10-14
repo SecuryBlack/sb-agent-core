@@ -10,8 +10,8 @@ use std::time::Duration;
 /// corriendo en consola sin permisos de administrador). Limpia logs de más
 /// de 7 días en cada arranque.
 ///
-/// Prioridad del nivel de log: `RUST_LOG` (si está definida) > `default_level`
-/// > `"info"`. La mayoría de agentes no tienen un nivel configurable propio y
+/// Prioridad del nivel de log: `RUST_LOG` (si está definida) >
+/// `default_level` > `"info"`. La mayoría de agentes no tienen un nivel configurable propio y
 /// simplemente pasan `"info"` como `default_level`; FerroSentry, que sí tiene
 /// `log_level` en su `config.toml`, pasa ese valor.
 pub fn init(agent_name: &str, log_dir: &Path, default_level: &str) {
@@ -21,7 +21,7 @@ pub fn init(agent_name: &str, log_dir: &Path, default_level: &str) {
 
     let env_filter = || {
         tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level.to_string()))
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level))
     };
 
     if writable {
