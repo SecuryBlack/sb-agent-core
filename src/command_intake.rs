@@ -14,6 +14,13 @@
 //! El servidor lo verifica antes de tocar el registro de handlers o el
 //! caché de idempotencia — un envelope sin token válido no llega a
 //! `CommandRegistry::dispatch`.
+//!
+//! Firma (S4): tras el `auth_token`, el servidor aplica
+//! `crate::command_signing::enforce` — firma inválida o caducada se rechaza
+//! siempre; sin firma se acepta con aviso mientras
+//! `REQUIRE_SIGNED_COMMANDS` sea `false`. Un `command_id` ya visto no se
+//! vuelve a ejecutar (se devuelve el resultado cacheado, o se rechaza si
+//! sigue en curso o no terminó).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -24,7 +31,7 @@ use std::time::Duration;
 
 /// Petición de comando tal y como llega al intake. `payload` es de forma
 /// libre a propósito — el core no sabe qué es `"os_upgrade"`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CommandEnvelope {
     pub command_id: String,
     pub command_type: String,
@@ -37,6 +44,13 @@ pub struct CommandEnvelope {
     /// si va a mandarlo por un canal que ya lo estampa.
     #[serde(default)]
     pub auth_token: String,
+    /// Firma ed25519 de la API en base64 (`crate::command_signing`). Se
+    /// reenvía tal cual; `None` en órdenes sin firmar (transición).
+    #[serde(default)]
+    pub signature: Option<String>,
+    /// Caducidad de la orden en segundos Unix; forma parte del mensaje firmado.
+    #[serde(default)]
+    pub expires_at: Option<i64>,
 }
 
 /// Progreso intermedio de un comando largo (p.ej. `os_upgrade`). Un handler
@@ -89,6 +103,9 @@ pub enum IntakeError {
     UnknownCommandType(String),
     Timeout,
     Unauthorized,
+    /// `command_id` ya visto que sigue en curso o no terminó (timeout).
+    Duplicate,
+    BadSignature(crate::command_signing::VerifyError),
 }
 
 impl std::fmt::Display for IntakeError {
@@ -97,6 +114,8 @@ impl std::fmt::Display for IntakeError {
             IntakeError::UnknownCommandType(t) => write!(f, "unknown command_type: {t}"),
             IntakeError::Timeout => write!(f, "command timed out"),
             IntakeError::Unauthorized => write!(f, "invalid or missing auth_token"),
+            IntakeError::Duplicate => write!(f, "duplicate command_id"),
+            IntakeError::BadSignature(e) => write!(f, "rejected command: {e}"),
         }
     }
 }
@@ -112,7 +131,8 @@ const SEEN_CAPACITY: usize = 256;
 
 struct SeenCommands {
     order: VecDeque<String>,
-    cache: HashMap<String, CommandResponse>,
+    /// `None`: empezó pero no terminó (en curso o timeout) — no se repite.
+    cache: HashMap<String, Option<CommandResponse>>,
 }
 
 impl SeenCommands {
@@ -120,11 +140,11 @@ impl SeenCommands {
         Self { order: VecDeque::new(), cache: HashMap::new() }
     }
 
-    fn get(&self, id: &str) -> Option<CommandResponse> {
+    fn get(&self, id: &str) -> Option<Option<CommandResponse>> {
         self.cache.get(id).cloned()
     }
 
-    fn insert(&mut self, id: String, resp: CommandResponse) {
+    fn insert(&mut self, id: String, resp: Option<CommandResponse>) {
         if !self.cache.contains_key(&id) {
             self.order.push_back(id.clone());
             if self.order.len() > SEEN_CAPACITY {
@@ -180,12 +200,20 @@ impl CommandRegistry {
         envelope: CommandEnvelope,
         progress_out: ProgressSender,
     ) -> Result<CommandResponse, IntakeError> {
-        if let Some(cached) = self.seen.lock().expect("seen lock poisoned").get(&envelope.command_id) {
-            return Ok(cached);
-        }
-
-        let Some(handler) = self.get(&envelope.command_type) else {
-            return Err(IntakeError::UnknownCommandType(envelope.command_type));
+        let handler = {
+            let mut seen = self.seen.lock().expect("seen lock poisoned");
+            match seen.get(&envelope.command_id) {
+                Some(Some(cached)) => return Ok(cached),
+                Some(None) => return Err(IntakeError::Duplicate),
+                None => {}
+            }
+            let Some(handler) = self.get(&envelope.command_type) else {
+                return Err(IntakeError::UnknownCommandType(envelope.command_type));
+            };
+            // Se marca antes de ejecutar (bajo el mismo lock) para que un
+            // duplicado concurrente o un reintento tras timeout no repita.
+            seen.insert(envelope.command_id.clone(), None);
+            handler
         };
 
         let timeout = Duration::from_secs(if envelope.timeout_secs == 0 {
@@ -198,10 +226,19 @@ impl CommandRegistry {
         let started = std::time::Instant::now();
         let work = handler(envelope.payload, tx);
         tokio::pin!(work);
+        // Un único plazo para todo el comando: si se creara en cada vuelta del
+        // loop, cada progreso (o un canal cerrado, que devuelve `None` sin
+        // parar) lo reiniciaría y el timeout no saltaría nunca.
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        let mut progress_open = true;
 
         let outcome = loop {
             tokio::select! {
-                progress = rx.recv() => {
+                progress = rx.recv(), if progress_open => {
+                    if progress.is_none() {
+                        progress_open = false;
+                    }
                     if let Some(mut p) = progress {
                         // El handler no conoce (ni debería tener que pasar)
                         // el `command_id` del envelope que lo invocó — lo
@@ -219,7 +256,7 @@ impl CommandRegistry {
                     }
                     break result;
                 }
-                _ = tokio::time::sleep(timeout) => {
+                _ = &mut deadline => {
                     return Err(IntakeError::Timeout);
                 }
             }
@@ -234,7 +271,7 @@ impl CommandRegistry {
             duration_ms: started.elapsed().as_millis() as i64,
         };
 
-        self.seen.lock().expect("seen lock poisoned").insert(envelope.command_id, response.clone());
+        self.seen.lock().expect("seen lock poisoned").insert(envelope.command_id, Some(response.clone()));
         Ok(response)
     }
 }
@@ -266,7 +303,7 @@ mod platform {
         base.join(format!("{agent_name}-cmd.sock"))
     }
 
-    pub fn spawn_server(registry: CommandRegistry, socket_path: PathBuf) {
+    pub fn spawn_server(registry: CommandRegistry, socket_path: PathBuf, signing: SigningContext) {
         // Sin token no arrancamos: un intake de comandos sin autenticación
         // es peor que no tenerlo (ver D:\infra\docs\design-command-intake.md).
         let token: Arc<str> = match crate::intake_auth::ensure_token() {
@@ -276,6 +313,7 @@ mod platform {
                 return;
             }
         };
+        let signing = Arc::new(signing);
 
         let _ = std::fs::remove_file(&socket_path);
         tokio::spawn(async move {
@@ -296,12 +334,17 @@ mod platform {
                 };
                 let registry = registry.clone();
                 let token = token.clone();
-                tokio::spawn(handle_connection(registry, token, stream));
+                tokio::spawn(handle_connection(registry, token, signing.clone(), stream));
             }
         });
     }
 
-    async fn handle_connection(registry: CommandRegistry, token: Arc<str>, stream: tokio::net::UnixStream) {
+    async fn handle_connection(
+        registry: CommandRegistry,
+        token: Arc<str>,
+        signing: Arc<SigningContext>,
+        stream: tokio::net::UnixStream,
+    ) {
         let (read_half, mut write_half) = stream.into_split();
         let mut reader = BufReader::new(read_half);
         let mut line = String::new();
@@ -321,6 +364,11 @@ mod platform {
         if !super::check_auth(&token, &envelope, &mut write_half).await {
             return;
         }
+        if let Err(e) = crate::command_signing::enforce(&envelope, &signing, crate::command_signing::unix_now()) {
+            warn!(command_id = %envelope.command_id, error = %e, "command intake: rejected command signature");
+            super::reject(&mut write_half, &IntakeError::BadSignature(e)).await;
+            return;
+        }
 
         super::run_and_reply_generic(&registry, envelope, &mut write_half).await;
     }
@@ -338,7 +386,7 @@ mod platform {
         format!(r"\\.\pipe\sb-agent-cmd-{agent_name}")
     }
 
-    pub fn spawn_server(registry: CommandRegistry, pipe_name: String) {
+    pub fn spawn_server(registry: CommandRegistry, pipe_name: String, signing: SigningContext) {
         let token: Arc<str> = match crate::intake_auth::ensure_token() {
             Ok(t) => t.into(),
             Err(e) => {
@@ -346,6 +394,7 @@ mod platform {
                 return;
             }
         };
+        let signing = Arc::new(signing);
 
         tokio::spawn(async move {
             loop {
@@ -362,7 +411,7 @@ mod platform {
                 }
                 let registry = registry.clone();
                 let token = token.clone();
-                tokio::spawn(handle_connection(registry, token, server));
+                tokio::spawn(handle_connection(registry, token, signing.clone(), server));
             }
         });
     }
@@ -370,6 +419,7 @@ mod platform {
     async fn handle_connection(
         registry: CommandRegistry,
         token: Arc<str>,
+        signing: Arc<SigningContext>,
         pipe: tokio::net::windows::named_pipe::NamedPipeServer,
     ) {
         let (read_half, mut write_half) = tokio::io::split(pipe);
@@ -391,6 +441,11 @@ mod platform {
         if !super::check_auth(&token, &envelope, &mut write_half).await {
             return;
         }
+        if let Err(e) = crate::command_signing::enforce(&envelope, &signing, crate::command_signing::unix_now()) {
+            warn!(command_id = %envelope.command_id, error = %e, "command intake: rejected command signature");
+            super::reject(&mut write_half, &IntakeError::BadSignature(e)).await;
+            return;
+        }
 
         super::run_and_reply_generic(&registry, envelope, &mut write_half).await;
     }
@@ -402,20 +457,23 @@ mod platform {
 /// debe seguir hacia `dispatch` en ese caso. Devuelve `true` si puede
 /// continuar.
 async fn check_auth<W: tokio::io::AsyncWrite + Unpin>(token: &str, envelope: &CommandEnvelope, out: &mut W) -> bool {
-    use tokio::io::AsyncWriteExt;
-
     if crate::intake_auth::constant_time_eq(token, &envelope.auth_token) {
         return true;
     }
 
     tracing::warn!(command_id = %envelope.command_id, "command intake: rejected envelope with invalid auth_token");
-    let err = serde_json::json!({ "error": IntakeError::Unauthorized.to_string() });
-    if let Ok(mut json) = serde_json::to_vec(&err) {
+    reject(out, &IntakeError::Unauthorized).await;
+    false
+}
+
+/// Escribe `{"error": "..."}` y cierra.
+async fn reject<W: tokio::io::AsyncWrite + Unpin>(out: &mut W, err: &IntakeError) {
+    use tokio::io::AsyncWriteExt;
+    if let Ok(mut json) = serde_json::to_vec(&serde_json::json!({ "error": err.to_string() })) {
         json.push(b'\n');
         let _ = out.write_all(&json).await;
     }
     let _ = out.shutdown().await;
-    false
 }
 
 /// Corre el comando y escribe al peer: cero o más líneas `CommandProgress`
@@ -477,6 +535,7 @@ async fn run_and_reply_generic<W: tokio::io::AsyncWrite + Unpin>(
     let _ = out.shutdown().await;
 }
 
+pub use crate::command_signing::SigningContext;
 pub use platform::{default_socket_path, spawn_server};
 
 #[cfg(test)]
@@ -496,6 +555,7 @@ mod tests {
             payload: serde_json::json!({"hello": "world"}),
             timeout_secs: 5,
             auth_token: String::new(),
+            ..Default::default()
         };
 
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -513,6 +573,7 @@ mod tests {
             payload: serde_json::Value::Null,
             timeout_secs: 5,
             auth_token: String::new(),
+            ..Default::default()
         };
 
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -539,6 +600,7 @@ mod tests {
             payload: serde_json::Value::Null,
             timeout_secs: 5,
             auth_token: String::new(),
+            ..Default::default()
         };
 
         let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel();
@@ -568,6 +630,7 @@ mod tests {
             payload: serde_json::Value::Null,
             timeout_secs: 5,
             auth_token: String::new(),
+            ..Default::default()
         };
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -576,5 +639,24 @@ mod tests {
         let seen: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].percent, 50);
+    }
+
+    #[tokio::test]
+    async fn dispatch_does_not_rerun_timed_out_command_id() {
+        let registry = CommandRegistry::new();
+        registry.register("hang", |_payload, _progress| async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            CommandOutcome::ok("late")
+        });
+        let envelope = CommandEnvelope {
+            command_id: "t1".to_string(),
+            command_type: "hang".to_string(),
+            timeout_secs: 1,
+            ..Default::default()
+        };
+
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        assert!(matches!(registry.dispatch(envelope.clone(), tx.clone()).await, Err(IntakeError::Timeout)));
+        assert!(matches!(registry.dispatch(envelope, tx).await, Err(IntakeError::Duplicate)));
     }
 }

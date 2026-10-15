@@ -17,7 +17,7 @@ async fn command_intake_roundtrip_with_progress() {
         CommandOutcome::ok(text.to_uppercase())
     });
 
-    spawn_server(registry, default_socket_path(agent_name));
+    spawn_server(registry, default_socket_path(agent_name), Default::default());
     // Dar tiempo al listener a bindear antes de conectar.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -27,6 +27,7 @@ async fn command_intake_roundtrip_with_progress() {
         payload: serde_json::json!({"text": "hola"}),
         timeout_secs: 5,
         auth_token: String::new(),
+        ..Default::default()
     };
 
     let agent_name_owned = agent_name.to_string();
@@ -51,7 +52,7 @@ async fn command_intake_roundtrip_with_progress() {
 async fn command_intake_reports_unknown_command_type() {
     let agent_name = "test-cmd-roundtrip-unknown-agent";
     let registry = CommandRegistry::new();
-    spawn_server(registry, default_socket_path(agent_name));
+    spawn_server(registry, default_socket_path(agent_name), Default::default());
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let envelope = CommandEnvelope {
@@ -60,6 +61,7 @@ async fn command_intake_reports_unknown_command_type() {
         payload: serde_json::Value::Null,
         timeout_secs: 5,
         auth_token: String::new(),
+        ..Default::default()
     };
 
     let agent_name_owned = agent_name.to_string();
@@ -79,7 +81,7 @@ async fn command_intake_rejects_wrong_auth_token() {
     let agent_name = "test-cmd-roundtrip-badtoken-agent";
     let registry = CommandRegistry::new();
     registry.register("echo", |payload, _progress| async move { CommandOutcome::ok(payload.to_string()) });
-    spawn_server(registry, default_socket_path(agent_name));
+    spawn_server(registry, default_socket_path(agent_name), Default::default());
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let envelope = CommandEnvelope {
@@ -88,6 +90,7 @@ async fn command_intake_rejects_wrong_auth_token() {
         payload: serde_json::Value::Null,
         timeout_secs: 5,
         auth_token: "definitely-not-the-real-token".to_string(),
+        ..Default::default()
     };
 
     let line = tokio::task::spawn_blocking(move || {

@@ -18,9 +18,9 @@
 //! Limitación conocida: el contexto firmado es solo el nombre del asset
 //! (`oxipulse-x86_64-unknown-linux-gnu.tar.gz`), no la versión. Eso impide
 //! cruzar binarios entre agentes o targets, pero no un downgrade: un archivo
-//! antiguo firmado se puede re-publicar bajo un tag más alto. Como solo hay
-//! firmas a partir de versiones que ya verifican, no se rompe la cadena; el
-//! riesgo es volver a una versión con un fallo conocido. Pendiente.
+//! antiguo firmado se puede re-publicar bajo un tag más alto. Nunca se
+//! instala un tag menor o igual al actual (`is_newer`), pero el binario de
+//! dentro no se comprueba contra el tag: ese hueco sigue pendiente.
 
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -128,17 +128,52 @@ pub fn check_now(cfg: &UpdaterConfig) -> Result<bool, Box<dyn std::error::Error 
 }
 
 fn check_and_update(cfg: &UpdaterConfig) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    let target = self_update::get_target();
+    let configure = || {
+        let mut b = self_update::backends::github::Update::configure();
+        b.repo_owner(cfg.github_owner)
+            .repo_name(cfg.github_repo)
+            .bin_name(cfg.bin_name)
+            .target(self_update::get_target())
+            .current_version(cfg.current_version)
+            .verifying_keys(VERIFYING_KEYS);
+        b
+    };
 
-    let status = self_update::backends::github::Update::configure()
-        .repo_owner(cfg.github_owner)
-        .repo_name(cfg.github_repo)
-        .bin_name(cfg.bin_name)
-        .target(target)
-        .current_version(cfg.current_version)
-        .verifying_keys(VERIFYING_KEYS)
-        .build()?
-        .update()?;
+    // Anti-rollback: elegimos nosotros la release y fijamos su tag, en vez de
+    // dejar que `self_update` escoja, para que la comparación que decide qué
+    // se instala sea esta y no un detalle interno de la librería.
+    let latest = configure().build()?.get_latest_release()?;
+    if !is_newer(cfg.current_version, &latest.version) {
+        return Ok(false);
+    }
 
+    let status = configure().target_version_tag(&format!("v{}", latest.version)).build()?.update()?;
     Ok(status.updated())
+}
+
+/// `true` solo si `candidate` es semver estrictamente mayor que `current`.
+/// Versiones que no parsean cuentan como "no más nueva": nunca instalamos
+/// algo que no sabemos ordenar.
+fn is_newer(current: &str, candidate: &str) -> bool {
+    match (semver::Version::parse(current), semver::Version::parse(candidate.trim_start_matches('v'))) {
+        (Ok(cur), Ok(cand)) => cand > cur,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer;
+
+    #[test]
+    fn only_strictly_newer_versions_install() {
+        assert!(is_newer("0.3.0", "0.3.1"));
+        assert!(is_newer("0.3.0", "v1.0.0"));
+        assert!(is_newer("0.9.0", "0.10.0"));
+        assert!(!is_newer("0.3.0", "0.3.0"));
+        assert!(!is_newer("0.3.1", "0.3.0"));
+        assert!(!is_newer("0.10.0", "0.9.0"));
+        assert!(!is_newer("1.0.0", "1.0.0-rc.1"));
+        assert!(!is_newer("0.3.0", "garbage"));
+    }
 }
