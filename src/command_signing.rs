@@ -33,15 +33,15 @@ use sha2::{Digest, Sha256};
 /// Claves públicas ed25519 de la API que firma las órdenes (dos huecos para
 /// rotar, como `updater::VERIFYING_KEYS`). Los huecos a cero se ignoran.
 ///
-/// Van a cero a propósito: la clave privada se genera en el servidor de la
-/// API (`COMMAND_SIGNING_KEY`) y nunca sale de allí; la pública se copia aquí
-/// al desplegar, ANTES de sacar releases de agentes. Mientras ambos huecos
-/// estén a cero, las órdenes firmadas se tratan como no verificables (aviso y
-/// se aceptan con `REQUIRE_SIGNED_COMMANDS = false`, rechazo con `true`).
+/// La clave privada se generó en el servidor de la API (`COMMAND_SIGNING_KEY`,
+/// 16-10-2026) y nunca sale de allí; aquí solo va la pública.
 pub const SIGNING_KEYS: [[u8; 32]; 2] = [
-    // sb-cmd-primary (pendiente de despliegue)
-    [0u8; 32],
-    // sb-cmd-backup (pendiente de despliegue)
+    // sb-cmd-primary (16-10-2026)
+    [
+        0xab, 0xdd, 0x6b, 0xb8, 0xe3, 0x4b, 0xb6, 0xde, 0xc4, 0x43, 0x2b, 0xa3, 0x16, 0x54, 0xc1, 0x9d,
+        0xdf, 0x4f, 0x06, 0x1a, 0xda, 0x4a, 0xef, 0xf7, 0x70, 0x54, 0xa9, 0x30, 0xd9, 0x1c, 0xfa, 0x06,
+    ],
+    // sb-cmd-backup (sin usar: para rotar la clave)
     [0u8; 32],
 ];
 
@@ -187,9 +187,11 @@ fn verify_with_keys(
     Err(if any_key { VerifyError::InvalidSignature } else { VerifyError::NoKeysConfigured })
 }
 
-/// Política del intake sobre [`verify_command`]: firma inválida o caducada
-/// se rechaza siempre; sin firma (o sin claves con las que verificar) se
-/// acepta con aviso mientras `REQUIRE_SIGNED_COMMANDS` sea `false`.
+/// Política del intake sobre [`verify_command`]: mientras
+/// `REQUIRE_SIGNED_COMMANDS` sea `false`, cualquier fallo se acepta con aviso.
+/// Rechazar una firma inválida no protege nada mientras se acepten órdenes
+/// sin firma (basta con quitarla), y así un token que no coincide con el del
+/// servidor se ve en el log antes de activar el rechazo, en vez de romper.
 pub fn enforce(envelope: &CommandEnvelope, ctx: &SigningContext, now: i64) -> Result<(), VerifyError> {
     enforce_with(envelope, ctx, now, &SIGNING_KEYS, REQUIRE_SIGNED_COMMANDS)
 }
@@ -203,7 +205,7 @@ fn enforce_with(
 ) -> Result<(), VerifyError> {
     match verify_with_keys(envelope, &ctx.target_agent, &ctx.server_token, now, keys) {
         Ok(()) => Ok(()),
-        Err(e @ (VerifyError::MissingSignature | VerifyError::NoKeysConfigured)) if !require => {
+        Err(e) if !require => {
             tracing::warn!(command_id = %envelope.command_id, reason = %e, "accepting unverified command (REQUIRE_SIGNED_COMMANDS = false)");
             Ok(())
         }
@@ -326,18 +328,39 @@ mod tests {
     }
 
     #[test]
-    fn invalid_signature_rejected_even_when_not_required() {
+    fn bad_signature_accepted_only_when_not_required() {
         let mut env = signed(json!({}), NOW + 900);
         env.command_type = "deploy_app".into();
-        assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), false), Err(VerifyError::InvalidSignature));
+        assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), false), Ok(()));
+        assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), true), Err(VerifyError::InvalidSignature));
         env.signature = Some("not base64!".into());
-        assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), false), Err(VerifyError::MalformedSignature));
+        assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), false), Ok(()));
+        assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), true), Err(VerifyError::MalformedSignature));
     }
 
     #[test]
-    fn expired_unsigned_rejected_even_when_not_required() {
+    fn expired_accepted_only_when_not_required() {
         let env = CommandEnvelope { expires_at: Some(NOW - 3600), ..Default::default() };
-        assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), false), Err(VerifyError::Expired));
+        assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), false), Ok(()));
+        assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), true), Err(VerifyError::Expired));
+    }
+
+    /// Firma hecha en el servidor de la API con la clave real (16-10-2026):
+    /// comprueba que `SIGNING_KEYS[0]` es su pública.
+    #[test]
+    fn production_key_verifies_api_signature() {
+        let env = CommandEnvelope {
+            command_id: "00000000-0000-0000-0000-0000000000aa".into(),
+            command_type: "os_upgrade".into(),
+            payload: json!({"a": 1}),
+            signature: Some(
+                "qXArmqL7jQ0nvB3YGYHYAlyNMKeswYjDoGTPCMl85oc383JT2pRK7HRd3eUj9VqDOwkv6ni/FXzqN0fo1uiNCQ==".into(),
+            ),
+            expires_at: Some(1_900_000_000),
+            ..Default::default()
+        };
+        assert_eq!(verify_command(&env, "ferrosentry", "srv-token", NOW), Ok(()));
+        assert_eq!(verify_command(&env, "ferrosentry", "otro-token", NOW), Err(VerifyError::InvalidSignature));
     }
 
     /// Vectores generados en la API con
