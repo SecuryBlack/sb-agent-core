@@ -17,7 +17,7 @@ name: Reusable Rust Agent Release
 #     contents: write
 #   jobs:
 #     release:
-#       uses: securyblack/sb-agent-core/.github/workflows/release.yml@main
+#       uses: securyblack/sb-agent-core/.github/workflows/release.yml@master
 #       with:
 #         binary-name: oxipulse
 #         targets-json: |
