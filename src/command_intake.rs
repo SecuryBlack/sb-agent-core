@@ -364,9 +364,7 @@ mod platform {
         if !super::check_auth(&token, &envelope, &mut write_half).await {
             return;
         }
-        if let Err(e) = crate::command_signing::enforce(&envelope, &signing, crate::command_signing::unix_now()) {
-            warn!(command_id = %envelope.command_id, error = %e, "command intake: rejected command signature");
-            super::reject(&mut write_half, &IntakeError::BadSignature(e)).await;
+        if !super::check_signature(&signing, &envelope, &mut write_half).await {
             return;
         }
 
@@ -441,9 +439,7 @@ mod platform {
         if !super::check_auth(&token, &envelope, &mut write_half).await {
             return;
         }
-        if let Err(e) = crate::command_signing::enforce(&envelope, &signing, crate::command_signing::unix_now()) {
-            warn!(command_id = %envelope.command_id, error = %e, "command intake: rejected command signature");
-            super::reject(&mut write_half, &IntakeError::BadSignature(e)).await;
+        if !super::check_signature(&signing, &envelope, &mut write_half).await {
             return;
         }
 
@@ -464,6 +460,35 @@ async fn check_auth<W: tokio::io::AsyncWrite + Unpin>(token: &str, envelope: &Co
     tracing::warn!(command_id = %envelope.command_id, "command intake: rejected envelope with invalid auth_token");
     reject(out, &IntakeError::Unauthorized).await;
     false
+}
+
+/// S4: antes de nada manda al peer la etapa `sig:*` con el resultado de
+/// verificar la firma (Nexus la reenvía a la API como cualquier progreso) y
+/// aplica la política de `command_signing::enforce`. Devuelve `true` si puede
+/// continuar.
+async fn check_signature<W: tokio::io::AsyncWrite + Unpin>(
+    signing: &crate::command_signing::SigningContext,
+    envelope: &CommandEnvelope,
+    out: &mut W,
+) -> bool {
+    use tokio::io::AsyncWriteExt;
+    let now = crate::command_signing::unix_now();
+    let stage = CommandProgress {
+        command_id: envelope.command_id.clone(),
+        stage: crate::command_signing::verification_stage(envelope, signing, now),
+        message: String::new(),
+        percent: -1,
+    };
+    if let Ok(mut json) = serde_json::to_vec(&stage) {
+        json.push(b'\n');
+        let _ = out.write_all(&json).await;
+    }
+    if let Err(e) = crate::command_signing::enforce(envelope, signing, now) {
+        tracing::warn!(command_id = %envelope.command_id, error = %e, "command intake: rejected command signature");
+        reject(out, &IntakeError::BadSignature(e)).await;
+        return false;
+    }
+    true
 }
 
 /// Escribe `{"error": "..."}` y cierra.
