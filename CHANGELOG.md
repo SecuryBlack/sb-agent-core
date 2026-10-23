@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.1] - 2026-10-23
+
+### Fixed
+- Old log files were never deleted: rotated files are named `<agent>.log.YYYY-MM-DD`, and the cleanup only looked at the `.log` extension. `logging::init` now keeps the last 7 files with the appender's `max_log_files`, pruning at startup and on every daily rotation.
+
 ## [0.4.0] - 2026-10-16
 
 ### Added
