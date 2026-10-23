@@ -44,8 +44,10 @@ async fn command_intake_roundtrip_with_progress() {
 
     assert!(response.success);
     assert_eq!(response.stdout, "HOLA");
-    assert_eq!(progress_seen.len(), 1);
-    assert_eq!(progress_seen[0].percent, 50);
+    // Primero la etapa S4 con el resultado de verificar (aquí la orden va sin firmar).
+    assert_eq!(progress_seen.len(), 2);
+    assert_eq!(progress_seen[0].stage, "sig:missing_signature");
+    assert_eq!(progress_seen[1].percent, 50);
 }
 
 #[tokio::test]

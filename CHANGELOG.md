@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.2] - 2026-10-23
+
+### Added
+- The command intake sends a `sig:ok` or `sig:<reason>` progress line before running each order (`missing_signature`, `missing_expiry`, `expired`, `malformed_signature`, `invalid_signature`, `no_keys`). edge-gateway stamps it in `server_commands.stage_times`, so the fleet can be measured before `REQUIRE_SIGNED_COMMANDS` is turned on. It is not a phase: the panel does not show it.
+- `command_signing::verification_stage` and `VerifyError::code`, for agents that verify their own orders outside the intake (Nexus).
+
 ## [0.4.1] - 2026-10-23
 
 ### Fixed

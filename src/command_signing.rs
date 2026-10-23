@@ -83,6 +83,20 @@ impl std::fmt::Display for VerifyError {
 
 impl std::error::Error for VerifyError {}
 
+impl VerifyError {
+    /// Motivo corto para la etapa `sig:<motivo>` de [`verification_stage`].
+    pub fn code(&self) -> &'static str {
+        match self {
+            VerifyError::MissingSignature => "missing_signature",
+            VerifyError::MissingExpiry => "missing_expiry",
+            VerifyError::Expired => "expired",
+            VerifyError::MalformedSignature => "malformed_signature",
+            VerifyError::InvalidSignature => "invalid_signature",
+            VerifyError::NoKeysConfigured => "no_keys",
+        }
+    }
+}
+
 /// Lo que el servidor del intake necesita para verificar: a qué servidor y a
 /// qué agente (nombre "de producto" de `server_commands.target_agent`, p.ej.
 /// `"ferrosentry"`) van atadas las órdenes que acepta.
@@ -185,6 +199,17 @@ fn verify_with_keys(
         }
     }
     Err(if any_key { VerifyError::InvalidSignature } else { VerifyError::NoKeysConfigured })
+}
+
+/// Etapa de progreso con el resultado de verificar (`sig:ok` o `sig:<motivo>`),
+/// para medir la flota antes de poner `REQUIRE_SIGNED_COMMANDS` a `true`.
+/// edge-gateway solo la sella en `server_commands.stage_times`; no es una fase
+/// y el panel no la ve.
+pub fn verification_stage(envelope: &CommandEnvelope, ctx: &SigningContext, now: i64) -> String {
+    match verify_command(envelope, &ctx.target_agent, &ctx.server_token, now) {
+        Ok(()) => "sig:ok".to_string(),
+        Err(e) => format!("sig:{}", e.code()),
+    }
 }
 
 /// Política del intake sobre [`verify_command`]: mientras
@@ -361,6 +386,26 @@ mod tests {
         };
         assert_eq!(verify_command(&env, "ferrosentry", "srv-token", NOW), Ok(()));
         assert_eq!(verify_command(&env, "ferrosentry", "otro-token", NOW), Err(VerifyError::InvalidSignature));
+    }
+
+    #[test]
+    fn verification_stage_reports_result() {
+        let mut env = CommandEnvelope {
+            command_id: "00000000-0000-0000-0000-0000000000aa".into(),
+            command_type: "os_upgrade".into(),
+            payload: json!({"a": 1}),
+            signature: Some(
+                "qXArmqL7jQ0nvB3YGYHYAlyNMKeswYjDoGTPCMl85oc383JT2pRK7HRd3eUj9VqDOwkv6ni/FXzqN0fo1uiNCQ==".into(),
+            ),
+            expires_at: Some(1_900_000_000),
+            ..Default::default()
+        };
+        assert_eq!(verification_stage(&env, &ctx(), NOW), "sig:ok");
+        let other = SigningContext { server_token: "otro-token".into(), ..ctx() };
+        assert_eq!(verification_stage(&env, &other, NOW), "sig:invalid_signature");
+        assert_eq!(verification_stage(&env, &ctx(), 1_900_000_000 + CLOCK_SKEW_SECS + 1), "sig:expired");
+        env.signature = None;
+        assert_eq!(verification_stage(&env, &ctx(), NOW), "sig:missing_signature");
     }
 
     /// Vectores generados en la API con
