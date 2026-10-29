@@ -45,10 +45,6 @@ pub const SIGNING_KEYS: [[u8; 32]; 2] = [
     [0u8; 32],
 ];
 
-/// Transición: `false` acepta órdenes sin firma con un aviso; la siguiente
-/// versión de los agentes sale con `true`. No configurable desde el servidor.
-pub const REQUIRE_SIGNED_COMMANDS: bool = false;
-
 /// Margen de reloj entre la API y el agente al comprobar `expires_at`.
 pub const CLOCK_SKEW_SECS: i64 = 300;
 
@@ -105,6 +101,10 @@ pub struct SigningContext {
     /// Token del config.toml del agente (el mismo que usa contra la API).
     pub server_token: String,
     pub target_agent: String,
+    /// Exigir la firma. Cada agente lo fija en su código (no se configura
+    /// desde el servidor) para activarlo agente a agente; con `false` se
+    /// aceptan órdenes sin firma o con firma inválida, con un aviso.
+    pub require_signature: bool,
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -202,7 +202,7 @@ fn verify_with_keys(
 }
 
 /// Etapa de progreso con el resultado de verificar (`sig:ok` o `sig:<motivo>`),
-/// para medir la flota antes de poner `REQUIRE_SIGNED_COMMANDS` a `true`.
+/// para medir la flota antes de exigir la firma (`require_signature`).
 /// edge-gateway solo la sella en `server_commands.stage_times`; no es una fase
 /// y el panel no la ve.
 pub fn verification_stage(envelope: &CommandEnvelope, ctx: &SigningContext, now: i64) -> String {
@@ -213,12 +213,12 @@ pub fn verification_stage(envelope: &CommandEnvelope, ctx: &SigningContext, now:
 }
 
 /// Política del intake sobre [`verify_command`]: mientras
-/// `REQUIRE_SIGNED_COMMANDS` sea `false`, cualquier fallo se acepta con aviso.
+/// `ctx.require_signature` sea `false`, cualquier fallo se acepta con aviso.
 /// Rechazar una firma inválida no protege nada mientras se acepten órdenes
 /// sin firma (basta con quitarla), y así un token que no coincide con el del
 /// servidor se ve en el log antes de activar el rechazo, en vez de romper.
 pub fn enforce(envelope: &CommandEnvelope, ctx: &SigningContext, now: i64) -> Result<(), VerifyError> {
-    enforce_with(envelope, ctx, now, &SIGNING_KEYS, REQUIRE_SIGNED_COMMANDS)
+    enforce_with(envelope, ctx, now, &SIGNING_KEYS, ctx.require_signature)
 }
 
 fn enforce_with(
@@ -231,7 +231,7 @@ fn enforce_with(
     match verify_with_keys(envelope, &ctx.target_agent, &ctx.server_token, now, keys) {
         Ok(()) => Ok(()),
         Err(e) if !require => {
-            tracing::warn!(command_id = %envelope.command_id, reason = %e, "accepting unverified command (REQUIRE_SIGNED_COMMANDS = false)");
+            tracing::warn!(command_id = %envelope.command_id, reason = %e, "accepting unverified command (require_signature = false)");
             Ok(())
         }
         Err(e) => Err(e),
@@ -258,7 +258,7 @@ mod tests {
     }
 
     fn ctx() -> SigningContext {
-        SigningContext { server_token: "srv-token".into(), target_agent: "ferrosentry".into() }
+        SigningContext { server_token: "srv-token".into(), target_agent: "ferrosentry".into(), require_signature: false }
     }
 
     fn signed(payload: serde_json::Value, expires_at: i64) -> CommandEnvelope {
@@ -361,6 +361,14 @@ mod tests {
         env.signature = Some("not base64!".into());
         assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), false), Ok(()));
         assert_eq!(enforce_with(&env, &ctx(), NOW, &keys(), true), Err(VerifyError::MalformedSignature));
+    }
+
+    #[test]
+    fn enforce_uses_require_signature_from_context() {
+        let env = CommandEnvelope { command_id: "x".into(), command_type: "t".into(), ..Default::default() };
+        assert_eq!(enforce(&env, &ctx(), NOW), Ok(()));
+        let strict = SigningContext { require_signature: true, ..ctx() };
+        assert_eq!(enforce(&env, &strict, NOW), Err(VerifyError::MissingSignature));
     }
 
     #[test]
