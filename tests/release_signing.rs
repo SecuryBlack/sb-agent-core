@@ -20,6 +20,7 @@ fn production_keys_are_valid_and_distinct() {
     assert_ne!(VERIFYING_KEYS[0], VERIFYING_KEYS[1]);
     // ponytail: check textual; si se borra la llamada, las claves no sirven de nada.
     assert!(include_str!("../src/updater.rs").contains(".verifying_keys(VERIFYING_KEYS)"));
+    assert!(include_str!("../src/updater.rs").contains(".no_confirm(true)"));
 }
 
 #[test]
@@ -46,4 +47,25 @@ fn only_production_keys_verify() {
     assert!(verify_tar(&mut signed, &test, Some(ASSET)).is_ok());
     // El contexto (nombre del asset) también cuenta: no se cruzan binarios.
     assert!(verify_tar(&mut signed, &test, Some(b"otro-agente.tar.gz")).is_err());
+}
+
+#[test]
+fn self_update_rejects_foreign_signatures() {
+    // La verificación que hace `self_update` tras descargar, con un fichero
+    // que se llama como el asset (así lo guarda la librería en el tempdir).
+    let test_key = SigningKey::from_bytes(&[7; 32]);
+    let mut signed = Cursor::new(Vec::new());
+    copy_and_sign_tar(
+        &mut Cursor::new(b"payload de prueba".to_vec()),
+        &mut signed,
+        std::slice::from_ref(&test_key),
+        Some(ASSET),
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(std::str::from_utf8(ASSET).unwrap());
+    std::fs::write(&path, signed.into_inner()).unwrap();
+
+    assert!(self_update::verify_signature(&path, &VERIFYING_KEYS).is_err());
+    assert!(self_update::verify_signature(&path, &[test_key.verifying_key().to_bytes()]).is_ok());
 }

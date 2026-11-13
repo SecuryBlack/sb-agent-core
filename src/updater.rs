@@ -135,6 +135,8 @@ fn check_and_update(cfg: &UpdaterConfig) -> Result<bool, Box<dyn std::error::Err
             .bin_name(cfg.bin_name)
             .target(self_update::get_target())
             .current_version(cfg.current_version)
+            // 1.x toma stdin cerrado (servicio) como "no" y aborta: sin esto no se actualiza nunca.
+            .no_confirm(true)
             .verifying_keys(VERIFYING_KEYS);
         b
     };
@@ -142,13 +144,14 @@ fn check_and_update(cfg: &UpdaterConfig) -> Result<bool, Box<dyn std::error::Err
     // Anti-rollback: elegimos nosotros la release y fijamos su tag, en vez de
     // dejar que `self_update` escoja, para que la comparación que decide qué
     // se instala sea esta y no un detalle interno de la librería.
-    let latest = configure().build()?.get_latest_release()?;
-    if !is_newer(cfg.current_version, &latest.version) {
+    let releases = configure().build()?.get_latest_release()?;
+    let Some(latest) = releases.latest() else { return Ok(false) };
+    if !is_newer(cfg.current_version, latest.version()) {
         return Ok(false);
     }
 
-    let status = configure().target_version_tag(&format!("v{}", latest.version)).build()?.update()?;
-    Ok(status.updated())
+    let status = configure().release_tag(format!("v{}", latest.version())).build()?.update()?;
+    Ok(status.is_updated())
 }
 
 /// `true` solo si `candidate` es semver estrictamente mayor que `current`.
