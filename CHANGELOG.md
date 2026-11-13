@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.3] - 2026-11-13
+
+### Security
+- `self_update` 0.42 -> 1.3: brings `zip` 9.5 (was 2.4; GHSA-m665-v7pm-7grj critical, GHSA-q7v9-x93c-xqv3 high, GHSA-8hxf-qr8p-62x4 medium). Releases are still verified with zipsign (`verify_tar`/`verify_zip`, asset name as context) against `VERIFYING_KEYS`.
+
+### Changed
+- The updater sets `no_confirm(true)`: `self_update` 1.x treats a closed stdin (systemd or Windows service) as "no" and would abort every update.
+- HTTP goes through reqwest 0.13 with rustls on aws-lc-rs (was ring).
+
 ## [0.4.2] - 2026-10-23
 
 ### Added
