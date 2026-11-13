@@ -143,9 +143,13 @@ WantedBy=multi-user.target
 EOF
 }
 
+# enable + restart, no `enable --now`: --now no reinicia un servicio que ya
+# corre, y al reinstalar seguiría el binario viejo. restart también arranca
+# uno parado, así que vale igual para la primera instalación.
 sb_enable_start_service() {
   local service_name="$1"
   systemctl daemon-reload
-  systemctl enable --now "$service_name"
-  sb_success "Service ${service_name} enabled and started"
+  systemctl enable "$service_name"
+  systemctl restart "$service_name"
+  sb_success "Service ${service_name} enabled and (re)started"
 }
