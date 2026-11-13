@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.0] - 2026-10-29
+
+### Changed
+- **Breaking:** `REQUIRE_SIGNED_COMMANDS` is gone. Each agent now decides in its own code whether to require signed orders, with the new `SigningContext::require_signature` field. With `true`, the intake rejects orders that are unsigned, badly signed or expired; with `false` it keeps accepting them with a warning, as before. This lets signatures be turned on one agent at a time. Agents that build a `SigningContext` must add the field (`false` keeps the current behaviour).
+
 ## [0.4.2] - 2026-10-23
 
 ### Added
