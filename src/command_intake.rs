@@ -16,7 +16,7 @@
 //! `CommandRegistry::dispatch`.
 //!
 //! Firma (S4): tras el `auth_token`, el servidor aplica
-//! `crate::command_signing::enforce` — mientras `REQUIRE_SIGNED_COMMANDS`
+//! `crate::command_signing::enforce` — mientras `SigningContext::require_signature`
 //! sea `false`, cualquier fallo de firma se acepta con aviso; con `true`, se
 //! rechaza. Un `command_id` ya visto no se
 //! vuelve a ejecutar (se devuelve el resultado cacheado, o se rechaza si
