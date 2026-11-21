@@ -77,17 +77,29 @@ function Get-SbArchTarget {
 }
 
 # ─── Última versión publicada en GitHub Releases ─────────────────────────────
+# No usa api.github.com: sin autenticar permite 60 peticiones por hora e IP, y
+# una instalación de varios agentes (o una NAT compartida) lo agota. Se lee la
+# redirección de github.com/<repo>/releases/latest -> .../releases/tag/<tag>.
 function Get-SbLatestVersion {
     param([Parameter(Mandatory)][string]$GithubRepo)
     Write-SbInfo "Fetching latest release from GitHub..."
-    $releaseApi = "https://api.github.com/repos/$GithubRepo/releases/latest"
+    $latestUrl = "https://github.com/$GithubRepo/releases/latest"
+    $location = $null
     try {
-        $releaseInfo = Invoke-RestMethod -Uri $releaseApi -Headers @{ "User-Agent" = "$SbAgentLabel-installer" }
+        $req = [System.Net.HttpWebRequest]::Create($latestUrl)
+        $req.Method = "HEAD"
+        $req.AllowAutoRedirect = $false
+        $req.UserAgent = "$SbAgentLabel-installer"
+        $resp = $req.GetResponse()
+        $location = $resp.Headers["Location"]
+        $resp.Close()
     } catch {
-        Invoke-SbFail "Could not reach GitHub API. Check your internet connection."
+        Invoke-SbFail "Could not reach GitHub ($latestUrl): $($_.Exception.Message)"
     }
-    $version = $releaseInfo.tag_name
-    if (-not $version) { Invoke-SbFail "Could not determine latest version. Check your internet connection." }
+    $marker = "/releases/tag/"
+    $idx = if ($location) { $location.IndexOf($marker) } else { -1 }
+    if ($idx -lt 0) { Invoke-SbFail "Could not determine latest version of $GithubRepo (no published release?)." }
+    $version = [System.Uri]::UnescapeDataString($location.Substring($idx + $marker.Length))
     Write-SbInfo "Latest version: $version"
     return $version
 }
